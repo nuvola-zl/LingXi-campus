@@ -1,0 +1,148 @@
+spring:
+  application:
+    name: lingxi-campus
+  profiles:
+    active: local          # 默认启用 local（本地开发）；服务器部署时用程序参数覆盖
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      embedding:
+        options:
+          model: text-embedding-v3
+    wanx:
+      model: wanxFLUX
+      endpoint: https://dashscope.aliyuncs.com/api/v1/services/a2xlvm9xb7tx/image%20generation
+      timeout: 60000
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:assistant}?sslmode=disable
+    driver-class-name: org.postgresql.Driver
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 10000
+      database: 0
+
+logging:
+  level:
+    root: info
+    top.lingxi.campus: info
+    top.lingxi.campus.common.interceptor.JwtTokenInterceptor: warn
+    top.lingxi.campus.ai.agent: debug
+    org.springframework.ai.chat.client.advisor: debug
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  metrics:
+    enable:
+      http.server.requests: true
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: top.lingxi.campus.domain.ai.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+    jdbc-type-for-null: NULL
+  global-config:
+    db-config:
+      id-type: AUTO
+      update-strategy: not_null
+  type-handlers-package: top.lingxi.campus.domain.handler
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v1/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+  default-flat-param-object: false
+
+knife4j:
+  enable: true
+  production: false
+
+# ===== 灵犀校园 · RAG 知识库配置 =====
+astra:
+  upload:
+    max-file-size: 100
+    allowed-types:
+      - application/pdf
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      - text/plain
+  embedding:
+    model: text-embedding-v3
+    dimensions: 1024
+    max-tokens: 8192
+  redis-stream:
+    queue-name: astra:parse:queue
+    dlq-name: astra:parse:dlq
+    consumer-group: astra-parse-group
+    consumer-name-prefix: consumer-
+    max-retries: 3
+    retry-delay-ms: 5000
+    block-timeout-ms: 5000
+  query-rewrite:
+    enabled: true
+    model: qwen-flash
+    max-tokens: 128
+    temperature: 0.3
+  search:
+    top-k:
+      bm25: 50
+      vector: 50
+    rrf-output-top-k: 30
+    rrf-k: 60
+    ef-search: 200
+  rerank:
+    enabled: true
+    model: qwen3-rerank
+    top-k: 10
+  parser:
+    chunk:
+      target-size: 600
+      overlap-ratio: 0.2
+      min-size: 100
+      max-paragraph-size: 1200
+
+ai:
+  jwt:
+    user-secret-key: ${JWT_SECRET:}
+    user-ttl: 604800000
+    user-token-name: Authorization
+  intent-detection:
+    model: qwen-turbo
+  alioss:
+    endpoint: oss-cn-hangzhou.aliyuncs.com
+    access-key-id: ${OSS_ACCESS_KEY_ID:}
+    access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+    bucket-name: ${OSS_BUCKET_NAME:}
+    region: cn-hangzhou
+
+server:
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+  tomcat:
+    accesslog:
+      enabled: true
+      directory: logs
+      prefix: access_log
+      suffix: .txt
+      pattern: '%h %l %u %t "%r" %s %b %D'
+
+feedback:
+  enabled: false
+  search:
+    enabled: false

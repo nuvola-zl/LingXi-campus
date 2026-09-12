@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="top.hazenix.hazeaihub.domain.ai.mapper.KbChunkMapper">
+
+    <!-- ========== 通用检索结果映射（解决 IDE 主键报警） ========== -->
+    <resultMap id="SearchResultMap"
+               type="top.lingxi.campus.result.KbChunkSearchResult">
+        <!-- 主键必须显式声明，这是 IDE 报警的根源 -->
+        <id column="id" property="id"/>
+
+        <result column="library_id" property="libraryId"/>
+        <result column="media_id" property="mediaId"/>
+        <result column="content" property="content"/>
+        <result column="chunk_index" property="chunkIndex"/>
+        <result column="metadata" property="metadata"
+                typeHandler="top.lingxi.campus.domain.handler.JsonTypeHandler"/>
+        <result column="created_at" property="createdAt"/>
+
+        <!-- 检索得分字段（SQL 里用别名映射，MyBatis 自动填充） -->
+        <result column="similarity" property="similarity"/>
+        <result column="bm25_score" property="bm25Score"/>
+        <result column="vector_score" property="vectorScore"/>
+        <result column="rrf_score" property="rrfScore"/>
+    </resultMap>
+
+    <select id="listByMediaId" resultType="top.lingxi.campus.domain.ai.entity.KbChunk">
+        SELECT * FROM kb_chunk WHERE media_id = #{mediaId} ORDER BY chunk_index
+    </select>
+
+    <select id="listByLibraryId" resultType="top.lingxi.campus.domain.ai.entity.KbChunk">
+        SELECT * FROM kb_chunk WHERE library_id = #{libraryId} ORDER BY media_id, chunk_index
+    </select>
+
+    <delete id="deleteByMediaId">
+        DELETE FROM kb_chunk WHERE media_id = #{mediaId}
+    </delete>
+
+    <delete id="deleteByLibraryId">
+        DELETE FROM kb_chunk WHERE library_id = #{libraryId}
+    </delete>
+
+    <select id="countByLibraryId" resultType="long">
+        SELECT COUNT(*) FROM kb_chunk WHERE library_id = #{libraryId}
+    </select>
+
+    <!-- 批量插入（Phase 2：新增 content_hash 列，配合增量更新） -->
+    <insert id="batchInsert">
+        INSERT INTO kb_chunk (library_id, media_id, content, embedding, chunk_index, metadata, content_hash)
+        VALUES
+        <foreach collection="chunks" item="chunk" separator=",">
+            (#{chunk.libraryId}, #{chunk.mediaId}, #{chunk.content},
+            #{chunk.embedding}::vector, #{chunk.chunkIndex}, #{chunk.metadata}::jsonb,
+            #{chunk.contentHash})
+        </foreach>
+    </insert>
+
+    <!-- ========== 混合检索 RRF ========== -->
+    <!--
+      Phase 1: WHERE library_id 改为 IN 查询，支持官方库+反馈库一次召回、RRF 统一融合。
+      多库时 vectorTopK / bm25TopK 是跨库共享的召回池上限。
+    -->
+    <select id="hybridSearchRrf" resultMap="SearchResultMap">
+        WITH hnsw_config AS (
+        SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true),
+        set_config('hnsw.ef_search', #{efSearch}::text, true)
+        ),
+        vector_search AS (
+        SELECT id, library_id, media_id, content, chunk_index, metadata, created_at,
+        ROW_NUMBER() OVER (ORDER BY embedding &lt;=&gt; #{queryEmbedding}::vector) AS rank,
+        1 - (embedding &lt;=&gt; #{queryEmbedding}::vector) AS vector_score
+        FROM kb_chunk, hnsw_config
+        WHERE library_id IN
+        <foreach collection="libraryIds" item="lid" open="(" separator="," close=")">
+            #{lid}
+        </foreach>
+        ORDER BY embedding &lt;=&gt; #{queryEmbedding}::vector
+        LIMIT #{vectorTopK}
+        ),
+        fulltext_search AS (
+        SELECT id, library_id, media_id, content, chunk_index, metadata, created_at,
+        ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('simple', content), query) DESC) AS rank,
+        ts_rank_cd(to_tsvector('simple', content), query) AS bm25_score
+        FROM kb_chunk, plainto_tsquery('simple', #{queryTerms}) query
+        WHERE library_id IN
+        <foreach collection="libraryIds" item="lid" open="(" separator="," close=")">
+            #{lid}
+        </foreach>
+        AND to_tsvector('simple', content) @@ query
+        ORDER BY bm25_score DESC
+        LIMIT #{bm25TopK}
+        )
+        SELECT
+        COALESCE(v.id, f.id) AS id,
+        COALESCE(v.library_id, f.library_id) AS library_id,
+        COALESCE(v.media_id, f.media_id) AS media_id,
+        COALESCE(v.content, f.content) AS content,
+        COALESCE(v.chunk_index, f.chunk_index) AS chunk_index,
+        COALESCE(v.metadata, f.metadata) AS metadata,
+        COALESCE(v.created_at, f.created_at) AS created_at,
+        COALESCE(v.vector_score, 0) AS vector_score,
+        COALESCE(f.bm25_score, 0) AS bm25_score,
+        (COALESCE(rrf_score(v.rank, #{rrfK}), 0) + COALESCE(rrf_score(f.rank, #{rrfK}), 0))::float AS rrf_score
+        FROM vector_search v
+        FULL OUTER JOIN fulltext_search f ON v.id = f.id
+        ORDER BY rrf_score DESC
+        LIMIT #{topK}
+    </select>
+
+    <!-- ========== 区间邻居查询（Phase 1 新增，替代原 findNeighbors 单点查询） ========== -->
+    <select id="findRangeNeighbors" resultType="top.lingxi.campus.domain.ai.entity.KbChunk">
+        SELECT id, library_id, media_id, content, chunk_index, metadata, created_at
+        FROM kb_chunk
+        WHERE media_id = #{mediaId}
+          AND chunk_index BETWEEN #{fromIndex} AND #{toIndex}
+        ORDER BY chunk_index
+    </select>
+
+</mapper>

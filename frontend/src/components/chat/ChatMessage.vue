@@ -1,0 +1,1658 @@
+<template>
+  <div class="message" :class="{ 'message-user': isUser, 'message-error': isError }">
+    <div class="avatar">
+      <UserCircleIcon v-if="isUser" class="icon" />
+      <ExclamationTriangleIcon v-else-if="isError" class="icon error-icon" />
+      <ComputerDesktopIcon v-else class="icon" :class="{ 'assistant': !isUser }" />
+    </div>
+    <div class="content">
+      <!-- 错误消息展示区域 -->
+      <div v-if="isError" class="error-section">
+        <div class="error-header">
+          <ExclamationTriangleIcon class="error-icon-large" />
+          <span class="error-title">连接失败</span>
+        </div>
+        <div class="error-message">{{ message.content }}</div>
+        <div class="error-actions">
+          <button class="retry-button" @click="handleRetry">
+            <ArrowPathIcon class="retry-icon" />
+            <span>重试</span>
+          </button>
+          <span class="error-hint">或检查网络连接后重试</span>
+        </div>
+      </div>
+
+      <template v-else>
+      <!-- 思考过程展示区域 -->
+      <div v-if="hasThinkingContent && !isUser" class="thinking-section">
+        <div class="thinking-header" @click="toggleThinking">
+          <div class="thinking-title">
+            <svg class="thinking-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            <span>深度思考已完成</span>
+            <span v-if="thinkingTime" class="thinking-time">(用时{{ thinkingTime }})</span>
+          </div>
+          <svg class="expand-icon" :class="{ 'expanded': isThinkingExpanded }" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+        <div v-show="isThinkingExpanded" class="thinking-content">
+          <div class="thinking-text">{{ thinkingContent }}</div>
+        </div>
+      </div>
+
+      <!-- 图片消息展示区域 -->
+      <div v-if="imageUrl && !isUser" class="image-message">
+        <div class="image-prompt" v-if="imagePrompt">
+          为您生成图片: {{ imagePrompt }}
+        </div>
+        <div class="image-container">
+          <img
+            :src="imageUrl"
+            style="display: block; width: 100%; height: auto; max-width: 512px;"
+          />
+        </div>
+        <div class="image-actions">
+          <button class="image-action-btn" @click="copyImageUrl(imageUrl)">
+            <DocumentDuplicateIcon class="action-icon" />
+            <span>复制链接</span>
+          </button>
+          <button class="image-action-btn" @click="downloadImage(imageUrl)">
+            <ArrowDownTrayIcon class="action-icon" />
+            <span>下载</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 普通文本消息展示区域 -->
+      <div v-if="!imageUrl || isUser" class="text-container">
+        <button v-if="isUser" class="user-copy-button" @click="copyContent" :title="copyButtonTitle">
+          <DocumentDuplicateIcon v-if="!copied" class="copy-icon" />
+          <CheckIcon v-else class="copy-icon copied" />
+        </button>
+        <div class="text" ref="contentRef" v-if="isUser">
+          {{ message.content }}
+        </div>
+        <div class="text markdown-content" ref="contentRef" v-else v-html="processedContent"></div>
+      </div>
+      <div class="message-footer" v-if="!isUser && !isImageMessage">
+        <button class="copy-button" @click="copyContent" :title="copyButtonTitle">
+          <DocumentDuplicateIcon v-if="!copied" class="copy-icon" />
+          <CheckIcon v-else class="copy-icon copied" />
+        </button>
+      </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Lightbox Modal -->
+  <div v-if="lightboxOpen" class="lightbox-overlay" @click="closeLightbox">
+    <div class="lightbox-content">
+      <button class="lightbox-close" @click="closeLightbox">
+        <XMarkIcon class="close-icon" />
+      </button>
+      <img :src="lightboxImageUrl" class="lightbox-image" @click.stop />
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, nextTick, ref, watch } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+import { UserCircleIcon, ComputerDesktopIcon, DocumentDuplicateIcon, CheckIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
+import { ArrowPathIcon } from '@heroicons/vue/24/solid'
+import { ArrowDownTrayIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
+
+const contentRef = ref(null)
+const copied = ref(false)
+const copyButtonTitle = computed(() => copied.value ? '已复制' : '复制内容')
+const isThinkingExpanded = ref(true)
+
+// Image message detection
+const isImageMessage = computed(() => {
+  return props.message.type === 'image' ||
+         (props.message.metadata?.image_url && !hasThinkingContent.value);
+});
+
+const imageUrl = computed(() => {
+  return props.message.imageUrl ||
+         props.message.metadata?.image_url ||
+         extractImageUrlFromContent(props.message.content);
+});
+
+const imagePrompt = computed(() => {
+  return props.message.prompt ||
+         props.message.metadata?.prompt ||
+         extractPromptFromContent(props.message.content);
+});
+
+function extractImageUrlFromContent(content) {
+  if (!content) return null;
+  const match = content.match(/!\[image\]\(([^)]+)\)/);
+  return match ? match[1] : null;
+}
+
+function extractPromptFromContent(content) {
+  if (!content) return null;
+  const match = content.match(/为您生成图片[:：]\s*(.+?)(?:\n|$)/);
+  return match ? match[1] : null;
+}
+
+// Lightbox state
+const lightboxOpen = ref(false);
+const lightboxImageUrl = ref('');
+
+function openLightbox(url) {
+  lightboxImageUrl.value = url;
+  lightboxOpen.value = true;
+}
+
+function closeLightbox() {
+  lightboxOpen.value = false;
+  lightboxImageUrl.value = '';
+}
+
+async function copyImageUrl(url) {
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch (e) {
+    console.error('Failed to copy:', e);
+  }
+}
+
+function downloadImage(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'generated-image.png';
+  a.click();
+}
+
+function handleImageError(e) {
+  const img = e.target;
+  console.warn('Image failed to load:', img.src, 'Original URL:', img.dataset.original);
+  // Prevent infinite loop - only retry once with placeholder
+  if (!img.dataset.retryAttempted) {
+    img.dataset.retryAttempted = 'true';
+    img.src = '/placeholder-image.png';
+  } else {
+    console.error('Placeholder image also failed to load');
+    img.alt = '图片加载失败';
+  }
+}
+
+// 提取思考内容（从metadata或content中的think标签）
+const thinkingContent = computed(() => {
+  // 优先从 metadata 中获取（支持 reasoning_content 和 thinking_content 两种字段）
+  if (props.message.metadata?.reasoning_content) {
+    return props.message.metadata.reasoning_content
+  }
+    
+  if (props.message.metadata?.thinking_content) {
+    return props.message.metadata.thinking_content
+  }
+  
+  // 从 content 中提取所有 <think> 块内容（流式场景下有多个）
+  const content = props.message.content || ''
+  const blocks = []
+  const regex = /<think>([\s\S]*?)<\/think>/g
+  let match
+  while ((match = regex.exec(content)) !== null) {
+    if (match[1]) {
+      blocks.push(match[1])
+    }
+  }
+  
+  // 处理流式场景下最后一个未闭合的 <think> 块
+  const lastOpen = content.lastIndexOf('<think>')
+  const lastClose = content.lastIndexOf('</think>')
+  if (lastOpen !== -1 && lastOpen > lastClose) {
+    const incomplete = content.substring(lastOpen + 7)
+    if (incomplete.trim()) {
+      blocks.push(incomplete)
+    }
+  }
+  
+  return blocks.join('')
+})
+
+// 获取不包含think标签的纯内容
+const pureContent = computed(() => {
+  const content = props.message.content || ''
+  // 移除所有已闭合的 <think>...</think> 块
+  let result = content.replace(/<think>[\s\S]*?<\/think>/g, '')
+  // 移除流式场景下最后一个未闭合的 <think> 块
+  const lastOpen = result.lastIndexOf('<think>')
+  if (lastOpen !== -1) {
+    result = result.substring(0, lastOpen)
+  }
+  return result.trim()
+})
+
+// 检查是否有思考内容
+const hasThinkingContent = computed(() => {
+  return !!thinkingContent.value && thinkingContent.value.trim().length > 0
+})
+
+// 思考时间（从metadata中获取）
+const thinkingTime = computed(() => {
+  const duration = props.message.metadata?.thinking_duration
+  if (!duration) return ''
+  
+  // 如果duration是数字（秒），格式化显示
+  if (typeof duration === 'number') {
+    if (duration < 60) {
+      return `${Math.round(duration)}秒`
+    } else {
+      const minutes = Math.floor(duration / 60)
+      const seconds = Math.round(duration % 60)
+      return `${minutes}分${seconds}秒`
+    }
+  }
+  
+  // 如果已经是字符串格式，直接返回
+  return duration
+})
+
+// 切换思考内容展开/收起
+const toggleThinking = () => {
+  isThinkingExpanded.value = !isThinkingExpanded.value
+}
+
+// 配置 marked
+marked.setOptions({
+  breaks: false,  // 不要把单个换行转成<br>
+  gfm: true,
+  sanitize: false
+})
+
+// 处理内容
+const processContent = (content) => {
+  if (!content) return ''
+
+  // 分析内容中的 think 标签
+  let result = ''
+  let isInThinkBlock = false
+  let currentBlock = ''
+  let thinkingBlocks = []
+
+  // 逐字符分析，处理 think 标签
+  for (let i = 0; i < content.length; i++) {
+    if (content.slice(i, i + 7) === '<think>') {
+      isInThinkBlock = true
+      if (currentBlock) {
+        // 将之前的普通内容转换为 HTML
+        result += marked.parse(currentBlock)
+      }
+      currentBlock = ''
+      i += 6 // 跳过 <think>
+      continue
+    }
+
+    if (content.slice(i, i + 8) === '</think>') {
+      isInThinkBlock = false
+      // 收集思考块内容
+      thinkingBlocks.push(currentBlock)
+      // 使用与完成后相同的样式
+      result += `<div class="thinking-section inline-thinking">
+        <div class="thinking-header">
+          <div class="thinking-title">
+            <svg class="thinking-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            <span>深度思考中...</span>
+          </div>
+        </div>
+        <div class="thinking-content-inline">${currentBlock}</div>
+      </div>`
+      currentBlock = ''
+      i += 7 // 跳过 </think>
+      continue
+    }
+
+    currentBlock += content[i]
+  }
+
+  // 处理剩余内容
+  if (currentBlock) {
+    if (isInThinkBlock) {
+      thinkingBlocks.push(currentBlock)
+      // 使用与完成后相同的样式
+      result += `<div class="thinking-section inline-thinking">
+        <div class="thinking-header">
+          <div class="thinking-title">
+            <svg class="thinking-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            <span>深度思考中...</span>
+          </div>
+        </div>
+        <div class="thinking-content-inline">${currentBlock}</div>
+      </div>`
+    } else {
+      result += marked.parse(currentBlock)
+    }
+  }
+
+  // 净化处理后的 HTML
+  const cleanHtml = DOMPurify.sanitize(result, {
+    ADD_TAGS: ['think', 'code', 'pre', 'span', 'svg', 'path', 'img'],
+    ADD_ATTR: ['class', 'language', 'viewBox', 'fill', 'stroke', 'stroke-linecap', 'stroke-linejoin', 'stroke-width', 'd', 'style', 'src', 'alt', 'title', 'width', 'height']
+  })
+  
+  // 在净化后的 HTML 中查找代码块并添加复制按钮
+  const tempDiv = document.createElement('div')
+  tempDiv.innerHTML = cleanHtml
+  
+  // 查找所有代码块
+  const preElements = tempDiv.querySelectorAll('pre')
+  preElements.forEach(pre => {
+    const code = pre.querySelector('code')
+    if (code) {
+      // 创建包装器
+      const wrapper = document.createElement('div')
+      wrapper.className = 'code-block-wrapper'
+      
+      // 添加复制按钮
+      const copyBtn = document.createElement('button')
+      copyBtn.className = 'code-copy-button'
+      copyBtn.title = '复制代码'
+      copyBtn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" class="code-copy-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      `
+      
+      // 添加成功消息
+      const successMsg = document.createElement('div')
+      successMsg.className = 'copy-success-message'
+      successMsg.textContent = '已复制!'
+      
+      // 组装结构
+      wrapper.appendChild(copyBtn)
+      wrapper.appendChild(pre.cloneNode(true))
+      wrapper.appendChild(successMsg)
+      
+      // 替换原始的 pre 元素
+      pre.parentNode.replaceChild(wrapper, pre)
+    }
+  })
+  
+  return tempDiv.innerHTML
+}
+
+// 修改计算属性
+const processedContent = computed(() => {
+  if (!props.message.content) return ''
+  // 如果有思考内容，使用纯内容（不包含think标签）
+  const contentToProcess = hasThinkingContent.value ? pureContent.value : props.message.content
+  return processContent(contentToProcess)
+})
+
+// 为代码块添加复制功能
+const setupCodeBlockCopyButtons = () => {
+  if (!contentRef.value) return;
+  
+  const codeBlocks = contentRef.value.querySelectorAll('.code-block-wrapper');
+  codeBlocks.forEach(block => {
+    const copyButton = block.querySelector('.code-copy-button');
+    const codeElement = block.querySelector('code');
+    const successMessage = block.querySelector('.copy-success-message');
+    
+    if (copyButton && codeElement) {
+      // 移除旧的事件监听器
+      const newCopyButton = copyButton.cloneNode(true);
+      copyButton.parentNode.replaceChild(newCopyButton, copyButton);
+      
+      // 添加新的事件监听器
+      newCopyButton.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const code = codeElement.textContent || '';
+          await navigator.clipboard.writeText(code);
+          
+          // 显示成功消息
+          if (successMessage) {
+            successMessage.classList.add('visible');
+            setTimeout(() => {
+              successMessage.classList.remove('visible');
+            }, 2000);
+          }
+        } catch (err) {
+          console.error('复制代码失败:', err);
+        }
+      });
+    }
+  });
+}
+
+// 在内容更新后手动应用高亮和设置复制按钮
+const highlightCode = async () => {
+  await nextTick()
+  if (contentRef.value) {
+    contentRef.value.querySelectorAll('pre code').forEach((block) => {
+      hljs.highlightElement(block)
+    })
+    
+    // 设置代码块复制按钮
+    setupCodeBlockCopyButtons()
+  }
+}
+
+const props = defineProps({
+  message: {
+    type: Object,
+    required: true
+  },
+  isStream: { type: Boolean, default: false }
+
+})
+
+const emit = defineEmits(['retry'])
+
+const handleRetry = () => {
+  emit('retry')
+}
+
+const isUser = computed(() => props.message.role === 'user')
+const isError = computed(() => props.message.role === 'error' || props.message.type === 'error')
+
+// 复制内容到剪贴板
+const copyContent = async () => {
+  try {
+    // 获取纯文本内容
+    let textToCopy = props.message.content;
+    
+    // 如果是AI回复，需要去除HTML标签
+    if (!isUser.value && contentRef.value) {
+      // 创建临时元素来获取纯文本
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = processedContent.value;
+      textToCopy = tempDiv.textContent || tempDiv.innerText || '';
+    }
+    
+    await navigator.clipboard.writeText(textToCopy);
+    copied.value = true;
+    
+    // 3秒后重置复制状态
+    setTimeout(() => {
+      copied.value = false;
+    }, 3000);
+  } catch (err) {
+    console.error('复制失败:', err);
+  }
+}
+
+// 监听内容变化
+watch(() => props.message.content, () => {
+  if (!isUser.value) {
+    highlightCode()
+  }
+})
+
+// 初始化时也执行一次
+onMounted(() => {
+  if (!isUser.value) {
+    highlightCode()
+  }
+})
+
+const formatTime = (timestamp) => {
+  if (!timestamp) return ''
+  return new Date(timestamp).toLocaleTimeString()
+}
+</script>
+
+<style scoped lang="scss">
+.message {
+  display: flex;
+  margin-bottom: 1rem;
+  gap: 0.75rem;
+  animation: fadeIn 0.3s ease;
+
+  &.message-user {
+    flex-direction: row-reverse;
+
+    .content {
+      align-items: flex-end;
+      
+      .error-section {
+        background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+        border: 1px solid #fca5a5;
+        border-radius: 0.75rem;
+        padding: 1rem;
+        
+        .error-header {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-bottom: 0.5rem;
+          
+          .error-icon-large {
+            width: 20px;
+            height: 20px;
+            color: #dc2626;
+          }
+          
+          .error-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #dc2626;
+          }
+        }
+        
+        .error-message {
+          color: #991b1b;
+          font-size: 0.875rem;
+          line-height: 1.5;
+          margin-bottom: 0.75rem;
+        }
+        
+        .error-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          
+          .retry-button {
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.5rem 1rem;
+            background: #dc2626;
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            
+            &:hover {
+              background: #b91c1c;
+              transform: translateY(-1px);
+              box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);
+            }
+            
+            &:active {
+              transform: translateY(0);
+            }
+            
+            .retry-icon {
+              width: 16px;
+              height: 16px;
+            }
+          }
+          
+          .error-hint {
+            color: #7f1d1d;
+            font-size: 0.75rem;
+            opacity: 0.8;
+          }
+        }
+      }
+      
+      .text-container {
+        position: relative;
+        
+        .text {
+          background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+          color: #1e293b;
+          border-radius: 1rem 1rem 0 1rem;
+          box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+        }
+        
+        .user-copy-button {
+          position: absolute;
+          left: -30px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: transparent;
+          border: none;
+          width: 24px;
+          height: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.2s;
+          
+          .copy-icon {
+            width: 16px;
+            height: 16px;
+            color: #666;
+            
+            &.copied {
+              color: #4ade80;
+            }
+          }
+        }
+        
+        &:hover .user-copy-button {
+          opacity: 1;
+        }
+      }
+      
+      .message-footer {
+        flex-direction: row-reverse;
+      }
+    }
+  }
+
+  &.message-error {
+    .avatar .icon.error-icon {
+      color: #dc2626;
+      background: #fee2e2;
+      
+      &:hover {
+        background: #fecaca;
+      }
+    }
+  }
+
+  .avatar {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+
+    .icon {
+      width: 100%;
+      height: 100%;
+      color: #666;
+      padding: 4px;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+
+      &.assistant {
+        color: #333;
+        background: #f0f0f0;
+
+        &:hover {
+          background: #e0e0e0;
+          transform: scale(1.05);
+        }
+      }
+      
+      &.error-icon {
+        color: #dc2626;
+        background: #fee2e2;
+      }
+    }
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    max-width: 80%;
+    
+    .thinking-section {
+      background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+      border: 1px solid #bae6fd;
+      border-radius: 0.75rem;
+      overflow: hidden;
+      margin-bottom: 0.5rem;
+      
+      &.inline-thinking {
+        margin: 0.5rem 0;
+        
+        .thinking-header {
+          cursor: default;
+          
+          &:hover {
+            background-color: transparent;
+          }
+        }
+        
+        .expand-icon {
+          display: none;
+        }
+      }
+      
+      .thinking-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.2s;
+        
+        &:hover {
+          background-color: rgba(255, 255, 255, 0.5);
+        }
+        
+        .thinking-title {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          font-size: 0.875rem;
+          color: #0369a1;
+          font-weight: 500;
+          
+          .thinking-icon {
+            width: 18px;
+            height: 18px;
+            color: #0284c7;
+          }
+          
+          .thinking-time {
+            color: #64748b;
+            font-weight: 400;
+            font-size: 0.8rem;
+          }
+        }
+        
+        .expand-icon {
+          width: 20px;
+          height: 20px;
+          color: #0369a1;
+          transition: transform 0.3s ease;
+          
+          &.expanded {
+            transform: rotate(180deg);
+          }
+        }
+      }
+      
+      .thinking-content {
+        padding: 0 1rem 0.75rem 1rem;
+        animation: slideDown 0.3s ease;
+        
+        .thinking-text {
+          padding: 0.75rem;
+          background: rgba(255, 255, 255, 0.6);
+          border-radius: 0.5rem;
+          color: #334155;
+          font-size: 0.875rem;
+          line-height: 1.6;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+      }
+    }
+    
+    .text-container {
+      position: relative;
+    }
+    
+    .message-footer {
+      display: flex;
+      align-items: center;
+      margin-top: 0.25rem;
+      
+      .time {
+        font-size: 0.75rem;
+        color: #666;
+      }
+      
+      .copy-button {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: transparent;
+        border: none;
+        font-size: 0.75rem;
+        color: #666;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-right: auto;
+        transition: background-color 0.2s;
+        
+        &:hover {
+          background-color: rgba(0, 0, 0, 0.05);
+        }
+        
+        .copy-icon {
+          width: 14px;
+          height: 14px;
+          
+          &.copied {
+            color: #4ade80;
+          }
+        }
+        
+        .copy-text {
+          font-size: 0.75rem;
+        }
+      }
+    }
+
+    .text {
+      padding: 0.75rem 1rem;
+      border-radius: 1rem 1rem 1rem 0;
+      line-height: 1.5;  // 减少行高从1.6到1.5
+      white-space: pre-wrap;
+      color: var(--text-color);
+      font-size: 0.95rem;
+
+      .cursor {
+        animation: blink 1s infinite;
+      }
+
+      :deep(pre) {
+        background: #f6f8fa;
+        padding: 0.875rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin: 0;
+        border: 1px solid #e1e4e8;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+
+        code {
+          background: transparent;
+          padding: 0;
+          font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+          font-size: 0.9375rem;
+          line-height: 1.6;
+          tab-size: 2;
+        }
+      }
+
+      :deep(.hljs) {
+        color: #24292e;
+        background: transparent;
+      }
+
+      :deep(.hljs-keyword) {
+        color: #d73a49;
+      }
+
+      :deep(.hljs-built_in) {
+        color: #005cc5;
+      }
+
+      :deep(.hljs-type) {
+        color: #6f42c1;
+      }
+
+      :deep(.hljs-literal) {
+        color: #005cc5;
+      }
+
+      :deep(.hljs-number) {
+        color: #005cc5;
+      }
+
+      :deep(.hljs-regexp) {
+        color: #032f62;
+      }
+
+      :deep(.hljs-string) {
+        color: #032f62;
+      }
+
+      :deep(.hljs-subst) {
+        color: #24292e;
+      }
+
+      :deep(.hljs-symbol) {
+        color: #e36209;
+      }
+
+      :deep(.hljs-class) {
+        color: #6f42c1;
+      }
+
+      :deep(.hljs-function) {
+        color: #6f42c1;
+      }
+
+      :deep(.hljs-title) {
+        color: #6f42c1;
+      }
+
+      :deep(.hljs-params) {
+        color: #24292e;
+      }
+
+      :deep(.hljs-comment) {
+        color: #6a737d;
+      }
+
+      :deep(.hljs-doctag) {
+        color: #d73a49;
+      }
+
+      :deep(.hljs-meta) {
+        color: #6a737d;
+      }
+
+      :deep(.hljs-section) {
+        color: #005cc5;
+      }
+
+      :deep(.hljs-name) {
+        color: #22863a;
+      }
+
+      :deep(.hljs-attribute) {
+        color: #005cc5;
+      }
+
+      :deep(.hljs-variable) {
+        color: #e36209;
+      }
+    }
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
+.dark {
+  .message {
+    &.message-error {
+      .avatar .icon.error-icon {
+        color: #f87171;
+        background: #7f1d1d;
+        
+        &:hover {
+          background: #991b1b;
+        }
+      }
+      
+      .content .error-section {
+        background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+        border-color: #dc2626;
+        
+        .error-header {
+          .error-icon-large {
+            color: #fca5a5;
+          }
+          
+          .error-title {
+            color: #fca5a5;
+          }
+        }
+        
+        .error-message {
+          color: #fecaca;
+        }
+        
+        .error-actions {
+          .retry-button {
+            background: #fca5a5;
+            color: #7f1d1d;
+            
+            &:hover {
+              background: #fecaca;
+              box-shadow: 0 2px 4px rgba(252, 165, 165, 0.3);
+            }
+          }
+          
+          .error-hint {
+            color: #fee2e2;
+          }
+        }
+      }
+    }
+    
+    .avatar .icon {
+      &.assistant {
+        color: #fff;
+        background: #444;
+
+        &:hover {
+          background: #555;
+        }
+      }
+    }
+
+    &.message-user {
+      .content .text-container {
+        .text {
+          background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+          color: #fff;
+          box-shadow: 0 2px 8px rgba(30, 58, 138, 0.3);
+        }
+        
+        .user-copy-button {
+          .copy-icon {
+            color: #999;
+            
+            &.copied {
+              color: #4ade80;
+            }
+          }
+        }
+      }
+    }
+
+    .content {
+      .thinking-section {
+        background: linear-gradient(135deg, #1e3a5f 0%, #2d4a6f 100%);
+        border-color: #3d5a7f;
+        
+        &.inline-thinking {
+          .thinking-header {
+            &:hover {
+              background-color: transparent;
+            }
+          }
+        }
+        
+        .thinking-header {
+          &:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+          }
+          
+          .thinking-title {
+            color: #7dd3fc;
+            
+            .thinking-icon {
+              color: #38bdf8;
+            }
+            
+            .thinking-time {
+              color: #94a3b8;
+            }
+          }
+          
+          .expand-icon {
+            color: #7dd3fc;
+          }
+        }
+        
+        .thinking-content {
+          .thinking-text {
+            background: rgba(0, 0, 0, 0.3);
+            color: #cbd5e1;
+          }
+        }
+      }
+      
+      .message-footer {
+        .time {
+          color: #999;
+        }
+        
+        .copy-button {
+          color: #999;
+          
+          &:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+          }
+        }
+      }
+
+      .text {
+        :deep(pre) {
+          background: #161b22;
+          border-color: #30363d;
+
+          code {
+            color: #c9d1d9;
+          }
+        }
+
+        :deep(.hljs) {
+          color: #c9d1d9;
+          background: transparent;
+        }
+
+        :deep(.hljs-keyword) {
+          color: #ff7b72;
+        }
+
+        :deep(.hljs-built_in) {
+          color: #79c0ff;
+        }
+
+        :deep(.hljs-type) {
+          color: #ff7b72;
+        }
+
+        :deep(.hljs-literal) {
+          color: #79c0ff;
+        }
+
+        :deep(.hljs-number) {
+          color: #79c0ff;
+        }
+
+        :deep(.hljs-regexp) {
+          color: #a5d6ff;
+        }
+
+        :deep(.hljs-string) {
+          color: #a5d6ff;
+        }
+
+        :deep(.hljs-subst) {
+          color: #c9d1d9;
+        }
+
+        :deep(.hljs-symbol) {
+          color: #ffa657;
+        }
+
+        :deep(.hljs-class) {
+          color: #f2cc60;
+        }
+
+        :deep(.hljs-function) {
+          color: #d2a8ff;
+        }
+
+        :deep(.hljs-title) {
+          color: #d2a8ff;
+        }
+
+        :deep(.hljs-params) {
+          color: #c9d1d9;
+        }
+
+        :deep(.hljs-comment) {
+          color: #8b949e;
+        }
+
+        :deep(.hljs-doctag) {
+          color: #ff7b72;
+        }
+
+        :deep(.hljs-meta) {
+          color: #8b949e;
+        }
+
+        :deep(.hljs-section) {
+          color: #79c0ff;
+        }
+
+        :deep(.hljs-name) {
+          color: #7ee787;
+        }
+
+        :deep(.hljs-attribute) {
+          color: #79c0ff;
+        }
+
+        :deep(.hljs-variable) {
+          color: #ffa657;
+        }
+      }
+
+      &.message-user .content .text {
+        background: #0066cc;
+        color: white;
+      }
+    }
+  }
+}
+
+.markdown-content {
+  :deep(p) {
+    margin: 0 0 0.5em 0;
+    line-height: 1.5;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  
+  :deep(h1), :deep(h2), :deep(h3), :deep(h4), :deep(h5), :deep(h6) {
+    margin: 0.8em 0 0.4em 0;
+    font-weight: 600;
+    line-height: 1.25;
+    
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+  
+  :deep(h1) { font-size: 1.5rem; }
+  :deep(h2) { font-size: 1.3rem; }
+  :deep(h3) { font-size: 1.15rem; }
+  :deep(h4) { font-size: 1.05rem; }
+  
+  :deep(strong) {
+    font-weight: 600;
+    color: #1a1a1a;
+  }
+  
+  :deep(hr) {
+    margin: 0.5rem 0;
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    opacity: 0.6;
+  }
+  
+  // 支持emoji和图标的样式
+  :deep(.emoji) {
+    font-size: 1.1em;
+    vertical-align: middle;
+  }
+
+  :deep(ul),
+  :deep(ol) {
+    margin: 0.25em 0;
+    padding-left: 1.5em;
+  }
+
+  :deep(li) {
+    margin: 0;
+    padding: 0;
+    line-height: 1.5;
+    
+    &::marker {
+      color: #007CF0;
+    }
+    
+    p {
+      margin: 0;
+    }
+  }
+
+  :deep(code) {
+    background: rgba(0, 124, 240, 0.08);
+    padding: 0.25em 0.5em;
+    border-radius: 0.375rem;
+    font-size: 0.9375em;
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    color: #0066cc;
+    font-weight: 500;
+    border: 1px solid rgba(0, 124, 240, 0.15);
+  }
+
+  :deep(pre code) {
+    background: transparent;
+    padding: 0;
+  }
+
+  :deep(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 0.5em 0;
+    cursor: pointer;
+  }
+
+  :deep(img:hover) {
+    opacity: 0.9;
+  }
+
+  :deep(table) {
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+    width: 100%;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    font-size: 0.95rem;
+  }
+
+  :deep(th),
+  :deep(td) {
+    border: 1px solid #e5e7eb;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    line-height: 1.5;
+  }
+
+  :deep(th) {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    font-weight: 600;
+    color: #1e293b;
+    border-bottom: 2px solid #cbd5e1;
+  }
+  
+  :deep(tbody tr) {
+    transition: background-color 0.2s;
+    
+    &:hover {
+      background-color: rgba(0, 124, 240, 0.03);
+    }
+    
+    &:nth-child(even) {
+      background-color: rgba(0, 0, 0, 0.02);
+    }
+  }
+
+  :deep(blockquote) {
+    margin: 0.5em 0;
+    padding: 0.4em 0.8em;
+    border-left: 3px solid #007CF0;
+    background: linear-gradient(90deg, rgba(0, 124, 240, 0.05) 0%, transparent 100%);
+    border-radius: 0 0.375rem 0.375rem 0;
+    color: #475569;
+    font-style: italic;
+    line-height: 1.5;
+  }
+
+  :deep(.thinking-section) {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+    border: 1px solid #bae6fd;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    margin: 0.5rem 0;
+    
+    .thinking-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      cursor: default;
+      user-select: none;
+      
+      .thinking-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+        color: #0369a1;
+        font-weight: 500;
+        
+        .thinking-icon {
+          width: 18px;
+          height: 18px;
+          color: #0284c7;
+        }
+      }
+    }
+    
+    .thinking-content {
+      padding: 0 1rem 0.75rem 1rem;
+      
+      .thinking-text {
+        padding: 0.75rem;
+        background: rgba(255, 255, 255, 0.6);
+        border-radius: 0.5rem;
+        color: #334155;
+        font-size: 0.875rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+    }
+    
+    .thinking-content-inline {
+      padding: 0 1rem 0.75rem 1rem;
+      color: #334155;
+      font-size: 0.875rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+  }
+
+  :deep(.code-block-wrapper) {
+    position: relative;
+    margin: 1rem 0;
+    border-radius: 6px;
+    overflow: hidden;
+    
+    .code-copy-button {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #e6e6e6;
+      cursor: pointer;
+      padding: 0.25rem;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.2s, background-color 0.2s;
+      z-index: 10;
+      
+      &:hover {
+        background-color: rgba(255, 255, 255, 0.2);
+      }
+      
+      .code-copy-icon {
+        width: 16px;
+        height: 16px;
+      }
+    }
+    
+    &:hover .code-copy-button {
+      opacity: 0.8;
+    }
+    
+    pre {
+      margin: 0;
+      padding: 1rem;
+      background: #1e1e1e;
+      overflow-x: auto;
+      
+      code {
+        background: transparent;
+        padding: 0;
+        font-family: ui-monospace, monospace;
+      }
+    }
+    
+    .copy-success-message {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: rgba(74, 222, 128, 0.9);
+      color: white;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: opacity 0.3s, transform 0.3s;
+      pointer-events: none;
+      z-index: 20;
+      
+      &.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  }
+}
+
+.dark {
+  .markdown-content {
+    :deep(.code-block-wrapper) {
+      .code-copy-button {
+        background: rgba(255, 255, 255, 0.05);
+        
+        &:hover {
+          background-color: rgba(255, 255, 255, 0.1);
+        }
+      }
+      
+      pre {
+        background: #0d0d0d;
+      }
+    }
+    
+    :deep(code) {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    :deep(th),
+    :deep(td) {
+      border-color: #444;
+    }
+
+    :deep(th) {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    :deep(blockquote) {
+      border-left-color: #444;
+      color: #999;
+    }
+
+    :deep(.thinking-section) {
+      background: linear-gradient(135deg, #1e3a5f 0%, #2d4a6f 100%);
+      border-color: #3d5a7f;
+      
+      .thinking-header {
+        .thinking-title {
+          color: #7dd3fc;
+          
+          .thinking-icon {
+            color: #38bdf8;
+          }
+        }
+      }
+      
+      .thinking-content {
+        .thinking-text {
+          background: rgba(0, 0, 0, 0.3);
+          color: #cbd5e1;
+        }
+      }
+      
+      .thinking-content-inline {
+        color: #cbd5e1;
+      }
+    }
+  }
+}
+
+// Image message styles
+.image-message {
+  margin: 8px 0;
+}
+
+.image-prompt {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.image-container {
+  max-width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.generated-image {
+  max-width: 100%;
+  max-height: 512px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.generated-image:hover {
+  transform: scale(1.02);
+}
+
+.image-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.image-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+
+  &:hover {
+    background: #f5f5f5;
+  }
+}
+
+.action-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Lightbox */
+.lightbox-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.lightbox-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+}
+
+.close-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.lightbox-image {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+}
+</style>
