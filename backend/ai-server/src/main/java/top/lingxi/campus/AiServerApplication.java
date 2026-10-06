@@ -12,6 +12,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "top.lingxi.campus.**.mapper",
         "top.lingxi.campus.user.UserMapper"
 })
+
+//redis-cli --scan --pattern "agent_dialog:*" | xargs redis-cli del
 @EnableScheduling
 @EnableAsync
 public class AiServerApplication {

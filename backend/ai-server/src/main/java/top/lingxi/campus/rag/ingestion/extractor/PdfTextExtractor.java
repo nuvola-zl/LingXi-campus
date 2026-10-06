@@ -1,10 +1,11 @@
-package top.lingxi.campus.rag.ingestion;
+package top.lingxi.campus.rag.ingestion.extractor;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Component;
+import top.lingxi.campus.rag.ingestion.TextSegment;
 
 import java.io.IOException;
 import java.util.ArrayList;

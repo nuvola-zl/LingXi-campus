@@ -1,18 +1,23 @@
 package top.lingxi.campus.itAgent.agent.core;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.Map;
 
 /**
  * LLM 调度器输出的结构化决策
  * 替代原来散落在各 State 里的硬编码 if-else
+ *
+ * [v3] ticketTitle：LLM 在建单决策时顺便生成工单标题（可选），代码截取仅作兜底
  */
+@JsonIgnoreProperties(ignoreUnknown = true)   // LLM 可能输出多余字段，忽略不报错
 public record AgentDecision(
-    String reasoning,           // LLM 思考过程（留痕，方便调试）
-    String action,              // RESPOND / TRANSITION / TOOL_CALL / COMPLETE
-    String targetState,         // TRANSITION 时有效：COLLECTING / CONFIRMING / DIAGNOSING
-    String content,             // RESPOND / COMPLETE 时：给用户的回复内容
-    String toolName,            // TOOL_CALL 时：工具名
-    Map<String, Object> toolInput   // TOOL_CALL 时：工具入参
+        String reasoning,           // LLM 思考过程（留痕，方便调试）
+        String action,              // RESPOND / TRANSITION / TOOL_CALL / COMPLETE
+        String targetState,         // TRANSITION 时有效：COLLECTING / CONFIRMING / DIAGNOSING
+        String content,             // RESPOND / COMPLETE 时：给用户的回复内容
+        String toolName,            // TOOL_CALL 时：工具名
+        Map<String, Object> toolInput,   // TOOL_CALL 时：工具入参
+        String ticketTitle          // [v3] TRANSITION→CONFIRMING 时：LLM 生成的工单标题（可空）
 ) {
     public boolean isRespond()    { return "RESPOND".equals(action); }
     public boolean isTransition() { return "TRANSITION".equals(action); }

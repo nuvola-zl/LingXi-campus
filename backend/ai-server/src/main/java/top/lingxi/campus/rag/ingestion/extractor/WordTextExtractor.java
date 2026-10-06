@@ -1,9 +1,10 @@
-package top.lingxi.campus.rag.ingestion;
+package top.lingxi.campus.rag.ingestion.extractor;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.springframework.stereotype.Component;
+import top.lingxi.campus.rag.ingestion.TextSegment;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;

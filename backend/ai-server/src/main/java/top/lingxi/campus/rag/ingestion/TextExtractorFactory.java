@@ -1,6 +1,7 @@
 package top.lingxi.campus.rag.ingestion;
 
 import org.springframework.stereotype.Component;
+import top.lingxi.campus.rag.ingestion.extractor.DocumentTextExtractor;
 
 import java.util.Collections;
 import java.util.HashMap;

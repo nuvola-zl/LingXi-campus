@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="top.hazenix.hazeaihub.domain.ai.mapper.KbChunkMapper">
+<mapper namespace="top.lingxi.campus.domain.ai.mapper.KbChunkMapper">
 
     <!-- ========== 通用检索结果映射（解决 IDE 主键报警） ========== -->
     <resultMap id="SearchResultMap"
@@ -57,9 +57,14 @@
 
     <!-- ========== 混合检索 RRF ========== -->
     <!--
-      Phase 1: WHERE library_id 改为 IN 查询，支持官方库+反馈库一次召回、RRF 统一融合。
+      WHERE library_id 改为 IN 查询，支持官方库+反馈库一次召回、RRF 统一融合。
       多库时 vectorTopK / bm25TopK 是跨库共享的召回池上限。
     -->
+<!--     调参数        → ef_search=200、iterative_scan-->
+<!--     向量海选      → 按语义距离取前 50（vectorTopK）-->
+<!--     BM25 海选     → 按关键词匹配取前 50（bm25TopK）-->
+<!--     RRF 决赛      → 两路名单合并，按"名次"算综合分-->
+<!--     取前 30       → LIMIT topK（rrfOutputTopK），返回前 30 条结果-->
     <select id="hybridSearchRrf" resultMap="SearchResultMap">
         WITH hnsw_config AS (
         SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true),

@@ -85,7 +85,6 @@ public class TicketQueryServiceImpl implements ITicketQueryService {
                 ticket.getCreatedAt().toLocalDate()
         ));
 
-        // ===== 新增：处理时间线 =====
         List<BizTicketComment> comments = commentMapper.selectByTicketId(ticket.getId());
         if (comments != null && !comments.isEmpty()) {
             sb.append("\n\n📋 处理记录：");

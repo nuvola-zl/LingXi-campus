@@ -78,6 +78,11 @@ public class DeviceRequestServiceImpl implements DeviceRequestService {
     public void allocateDevice(String requestNo) {
         AdminDeviceRequest request = getByRequestNo(requestNo);
 
+        // 【状态机校验】只有"准备中"(3)的单据才允许分配，防止重复调用二次分配
+        if (request.getStatus() != 3) {
+            throw new RuntimeException("申领单当前状态不允许分配（status=" + request.getStatus() + "）");
+        }
+
         // 1. 悲观锁查库存
         AdminDeviceInventory inventory = inventoryMapper.selectForUpdate(request.getDeviceType());
         if (inventory == null || inventory.getAvailableCount() <= 0) {
@@ -279,6 +284,16 @@ public class DeviceRequestServiceImpl implements DeviceRequestService {
     public AdminDeviceRequest getByPurchaseOrderNo(String purchaseOrderNo) {
         QueryWrapper<AdminDeviceRequest> wrapper = new QueryWrapper<>();
         wrapper.eq("purchase_order_no", purchaseOrderNo);
+        return deviceRequestMapper.selectOne(wrapper);
+    }
+
+    /**
+     * 按单号查询【当前用户自己的】申领单（供 AI 工具调用，防越权）
+     */
+    @Override
+    public AdminDeviceRequest getOwnByRequestNo(String requestNo, Long userId) {
+        QueryWrapper<AdminDeviceRequest> wrapper = new QueryWrapper<>();
+        wrapper.eq("request_no", requestNo).eq("user_id", userId);
         return deviceRequestMapper.selectOne(wrapper);
     }
 }

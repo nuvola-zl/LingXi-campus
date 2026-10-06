@@ -2,6 +2,7 @@ package top.lingxi.campus.admin.task;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,17 +25,14 @@ import java.util.List;
  */
 @Component
 @Slf4j
+@RequiredArgsConstructor
 public class DeviceTimeoutJob {
 
-    @Autowired
-    private AdminDeviceRequestMapper requestMapper;
+    private final AdminDeviceRequestMapper requestMapper;
 
-    @Autowired
-    private AdminDeviceDetailMapper detailMapper;
+    private final AdminDeviceDetailMapper detailMapper;
 
-    @Autowired
-    private AdminDeviceInventoryMapper inventoryMapper;
-
+    private final AdminDeviceInventoryMapper inventoryMapper;
     /**
      * 每天凌晨 2 点执行
      */

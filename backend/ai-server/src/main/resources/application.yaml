@@ -9,10 +9,7 @@ spring:
       embedding:
         options:
           model: text-embedding-v3
-    wanx:
-      model: wanxFLUX
-      endpoint: https://dashscope.aliyuncs.com/api/v1/services/a2xlvm9xb7tx/image%20generation
-      timeout: 60000
+
 
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:assistant}?sslmode=disable

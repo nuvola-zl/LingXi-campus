@@ -100,9 +100,13 @@ public class AstraParseConsumer {
             return t;
         });
 
+        //发工牌，Redis Stream 的消费者组是靠名字区分"谁来消费"的。用来解决多个消费者同时消费之间的竞争问题。
         consumerName = streamConfig.getConsumerNamePrefix() + UUID.randomUUID().toString().substring(0, 8);
+
+
         stream = redissonClient.getStream(streamConfig.getQueueName());
 
+        // 如果队列本身还不存在（第一次部署，一条消息都没发过），先创建空队列，再建组。
         ensureConsumerGroup();
 
         // 启动消费循环
@@ -128,7 +132,10 @@ public class AstraParseConsumer {
         log.info("AstraParseConsumer 已关闭");
     }
 
-    private void shutdownExecutor(ExecutorService executor, String name, int timeoutSeconds) {
+    /**
+     * 关闭线程池，等待所有任务完成
+     */
+       private void shutdownExecutor(ExecutorService executor, String name, int timeoutSeconds) {
         if (executor == null) {
             return;
         }
@@ -167,6 +174,7 @@ public class AstraParseConsumer {
 
     /**
      * 消费者主循环
+     * "取件→分发"
      */
     private void consumeLoop() {
         while (running.get()) {
@@ -186,7 +194,10 @@ public class AstraParseConsumer {
                     continue;
                 }
 
+                // 只要能成功取到一次，就说明 Redis 是好的，把"连续失败次数"清零
                 errorCount.set(0);
+
+                //分发任务
                 for (Map.Entry<StreamMessageId, Map<String, String>> entry : entries.entrySet()) {
                     final StreamMessageId msgId = entry.getKey();
                     final Map<String, String> fields = entry.getValue();
@@ -228,7 +239,9 @@ public class AstraParseConsumer {
 
             // 执行入库流水线（进度按批次回调，SSE 推送真实进度）
             List<ChunkResponse> chunks = ingestionPipeline.ingest(message, (completed, total) -> {
+
                 int percent = total == 0 ? 0 : (int) (completed * 100.0 / total);
+
                 sseEmitterService.sendProgress(message.getMediaId(), total, completed, percent);
             });
 

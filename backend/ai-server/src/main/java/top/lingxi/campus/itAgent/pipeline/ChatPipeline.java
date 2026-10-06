@@ -17,6 +17,8 @@ import top.lingxi.campus.ai.service.ITitleGenerationService;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 对话统一管道
@@ -38,7 +40,7 @@ public class ChatPipeline {
      * 系统标记前缀集合（这些标记不会进入消息保存内容）
      */
     private static final Set<String> SYSTEM_MARKERS = Set.of(
-            "SESSION_CREATED:", "AI_PROMPT:", "IMAGE_URL:", "DONE", "ERROR:"
+            "SESSION_CREATED:",  "ERROR:"
     );
 
     // ==================== 前置处理 ====================
@@ -48,6 +50,8 @@ public class ChatPipeline {
      * 新会话时，chat_session.type 写入 domain（IT/HR/ADMIN），方便后续复用
      */
     public void prepare(ChatContext ctx) {
+
+        // 事务处理：确保会话创建和消息保存原子性
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.execute(status -> {
             doPrepare(ctx);
@@ -79,6 +83,7 @@ public class ChatPipeline {
         }
 
         ctx.setFinalSessionId(finalSessionId);
+        //多轮会话必须先于llm调用，否则后续链路查询不到这个用户消息
         chatMessageService.saveUserMessage(finalSessionId, ctx.getPrompt());
     }
 
@@ -97,30 +102,34 @@ public class ChatPipeline {
      *
      * 收集策略：
      * 1. 流中的 <think> 标签内容会被提取到 reasoning_content
-     * 2. 系统标记（SESSION_CREATED:/AI_PROMPT:/IMAGE_URL:/DONE/ERROR:）不会进入保存内容
+     * 2. 系统标记（SESSION_CREATED:/ERROR:）不会进入保存内容
      * 3. 如果 Handler 显式设置了 ctx.responseContent，则优先使用（覆盖自动收集）
      * 4. 如果 Handler 显式设置了 ctx.responseMetadata，会合并到最终元数据
      */
     public Flux<String> wrap(ChatContext ctx, Flux<String> flux) {
         StringBuilder contentBuilder = new StringBuilder();
-        StringBuilder reasoningBuilder = new StringBuilder();
 
         return flux
+                // 便利贴1：每来一片，先收集（过滤系统标记）
                 .doOnNext(chunk -> {
                     if (SYSTEM_MARKERS.stream().noneMatch(chunk::startsWith)) {
                         contentBuilder.append(chunk);
                     }
                 })
+                // 便利贴2：全部吐完，把收集的内容存数据库
                 .doOnComplete(() -> {
-                    String content = ctx.getResponseContent();
-                    if (content == null || content.isEmpty()) {
-                        content = contentBuilder.toString().trim();
+
+                    String rawContent = ctx.getResponseContent();
+                    if (rawContent == null || rawContent.isEmpty()) {
+                        rawContent = contentBuilder.toString().trim();
                     }
-                    content = removeThinkTags(content);
+
+                    String reasoningContent = extractReasoningFromThinkTags(rawContent);
+                    String content = removeThinkTags(rawContent);
 
                     Map<String, Object> metadata = new HashMap<>(ctx.getResponseMetadata());
-                    if (!reasoningBuilder.isEmpty()) {
-                        metadata.put("reasoning_content", reasoningBuilder.toString());
+                    if (!reasoningContent.isEmpty()) {
+                        metadata.put("reasoning_content", reasoningContent);
                     }
 
                     // 关键：在 doOnComplete 回调内部开启独立事务
@@ -129,6 +138,7 @@ public class ChatPipeline {
                     ctx.setResponseContent(null);
                     ctx.setResponseMetadata(new HashMap<>());
                 })
+                // 便利贴3：出错了，推错误文案兜底
                 .onErrorResume(error -> {
                     log.error("流式处理异常: domain={}, sessionId={}", ctx.getDomain(), ctx.getFinalSessionId(), error);
                     return Flux.just("ERROR:服务暂时不可用");
@@ -149,6 +159,21 @@ public class ChatPipeline {
     }
 
     /**
+     * 【修复A-1】从完整文本提取 think 标签内的推理内容
+     * （替代原来从未被调用、且实现损坏的 extractThinkContent）
+     */
+    private String extractReasoningFromThinkTags(String text) {
+        if (text == null || text.isEmpty()) return "";
+        StringBuilder reasoning = new StringBuilder();
+        Pattern pattern = Pattern.compile("<think>(.*?)</think>", Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(text);
+        while (matcher.find()) {
+            reasoning.append(matcher.group(1));
+        }
+        return reasoning.toString();
+    }
+
+    /**
      * 统一后置处理（保存 AI 消息 + 更新会话时间 + 新会话生成标题）
      */
     public void finalize(ChatContext ctx, String content, Map<String, Object> metadata) {
@@ -165,16 +190,7 @@ public class ChatPipeline {
         chatSessionService.updateLastActiveTime(ctx.getFinalSessionId());
 
         if (ctx.isNewSession()) {
-            titleGenerationService.generateAndUpdateTitle(ctx.getFinalSessionId());
+            titleGenerationService.generateAndUpdateTitle(ctx.getFinalSessionId(), ctx.getPrompt(), content);
         }
-    }
-
-    private String extractThinkContent(String chunk) {
-        int start = chunk.indexOf(" t...d");
-        int end = chunk.indexOf("d  ");
-        if (start != -1 && end != -1 && end > start) {
-            return chunk.substring(start + 7, end);
-        }
-        return null;
     }
 }

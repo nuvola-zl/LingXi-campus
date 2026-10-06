@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.ibatis.jdbc.SQL;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -73,10 +74,11 @@ public class ChatController {
         log.info("收到聊天请求: domain={}, sessionId={}, hasFile={}, prompt={}",
                 domain, sessionId, file != null, prompt);
 
-        // ========== 功能一：处理上传文件 ==========
+
         String finalPrompt = prompt;
 
         if (file != null && !file.isEmpty()) {
+            // 处理文件内容
             var result = fileChatService.process(file);
             log.info("文件处理结果: fileName={}, extractedText长度={}, isTooLong={}",
                     result.getFileName(),
@@ -111,10 +113,11 @@ public class ChatController {
         }
 
 
-        // ========== 原有 SSE 逻辑完全不变 ==========
+        // 2. 初始化 SSE 发送器
         SseEmitter emitter = new SseEmitter(-1L);
 
         chatService.textChat(domain, groupId, sessionId, finalPrompt, enableThinking, thinkingBudget, model)
+                // 订阅时登记回调，数据到达时回调被自动触发
                 .subscribe(
                         chunk -> {
                             try {

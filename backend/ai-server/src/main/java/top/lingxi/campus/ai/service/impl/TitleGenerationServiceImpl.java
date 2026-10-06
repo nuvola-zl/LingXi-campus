@@ -16,94 +16,74 @@ import top.lingxi.campus.ai.service.ITitleGenerationService;
 
 import java.util.List;
 
-/**
- * @description: 标题生成服务实现
- * @author: Hazenix
- * @version: 1.0.0
- * @date: 2026/1/27
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TitleGenerationServiceImpl implements ITitleGenerationService {
-    
-    private final IChatMessageService chatMessageService;
+
     private final IChatSessionService chatSessionService;
     private final DashScopeChatModel chatModel;
-    
+
     private static final int MAX_TITLE_LENGTH = 30;
-    
+
     @Override
     public String generateTitle(List<ChatMessage> messages) {
         if (messages == null || messages.isEmpty()) {
             log.warn("消息列表为空，返回默认标题");
             return "新对话";
         }
-        
         try {
-            // 构建提示词
             StringBuilder conversationText = new StringBuilder();
             for (ChatMessage msg : messages) {
                 String role = RoleConstant.USER.equals(msg.getRole()) ? "用户" : "AI";
                 conversationText.append(role).append("：").append(msg.getContent()).append("\n");
             }
-            
-            String promptText = String.format(
-                PromptConstant.SESSION_TITLE_GENERATE_PROMPT_V2,
-                MAX_TITLE_LENGTH,
-                conversationText.toString()
-            );
-            
-            // 使用 Spring AI 调用大模型生成标题
-            Prompt prompt = new Prompt(promptText);
-            ChatResponse response = chatModel.call(prompt);
-            
-            if (response != null && response.getResult() != null 
-                    && response.getResult().getOutput() != null) {
-                
-                String title = response.getResult().getOutput().getText().trim();
-                
-                // 移除可能的引号
-                title = title.replaceAll("^[\"']|[\"']$", "");
-                
-                // 限制长度
-                if (title.length() > MAX_TITLE_LENGTH) {
-                    title = title.substring(0, MAX_TITLE_LENGTH) + "...";
-                }
-                
-                log.info("标题生成成功: {}", title);
-                return title;
-            }
-            
-            log.warn("标题生成失败，返回默认标题");
-            return "新对话";
-            
+            return callLlmForTitle(conversationText.toString());
         } catch (Exception e) {
             log.error("标题生成异常", e);
             return "新对话";
         }
     }
+
     @Async
     @Override
-    public void generateAndUpdateTitle(Long sessionId) {
-        log.info("开始生成标题: sessionId={}", sessionId);
-        
+    public void generateAndUpdateTitle(Long sessionId, String userContent, String aiContent) {
         try {
-            // 获取首轮对话
-            List<ChatMessage> messages = chatMessageService.getFirstRoundMessages(sessionId);
-            
-
-            
-            // 生成标题
-            String title = generateTitle(messages);
-            
-            // 更新会话标题
+            // [fix] 内容直接传参，避免异步线程在外层事务提交前读库导致首轮消息不全
+            String conversationText = "用户：" + userContent + "\nAI：" + (aiContent == null ? "" : aiContent);
+            String title = callLlmForTitle(conversationText);
             chatSessionService.updateSession(sessionId, title, null);
-            
             log.info("标题生成并更新成功: sessionId={}, title={}", sessionId, title);
-            
         } catch (Exception e) {
             log.error("异步标题生成失败: sessionId={}", sessionId, e);
         }
+    }
+
+    /** LLM 生成标题的核心逻辑（两种数据源共用） */
+    private String callLlmForTitle(String conversationText) {
+        String promptText = String.format(
+                PromptConstant.SESSION_TITLE_GENERATE_PROMPT_V2,
+                MAX_TITLE_LENGTH,
+                conversationText
+        );
+
+        Prompt prompt = new Prompt(promptText);
+        ChatResponse response = chatModel.call(prompt);
+
+        if (response != null && response.getResult() != null
+                && response.getResult().getOutput() != null) {
+
+            String title = response.getResult().getOutput().getText().trim();
+            title = title.replaceAll("^[\"']|[\"']$", "");   // 去引号
+
+            if (title.length() > MAX_TITLE_LENGTH) {
+                title = title.substring(0, MAX_TITLE_LENGTH) + "...";
+            }
+            log.info("标题生成成功: {}", title);
+            return title;
+        }
+
+        log.warn("标题生成失败，返回默认标题");
+        return "新对话";
     }
 }

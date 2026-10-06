@@ -71,14 +71,23 @@ public class RerankClient {
         log.debug("ReRank重排序: query={}, chunks={}, topK={}", query, chunks.size(), topK);
         try {
             String responseBody = callRerankApi(query, chunks);
+            //返回按 relevance_score 降序的结果
             List<ChunkResponse> reranked = parseRerankResult(responseBody, chunks);
+            //截断 topK 个
             return truncate(reranked, topK);
         } catch (Exception e) {
             log.error("ReRank重排序失败，退回原始顺序", e);
+            //截断 topK 个
             return truncate(chunks, topK);
         }
     }
 
+    /**
+     * 截断分片列表，返回前 topK 个
+     * @param chunks 候选分片
+     * @param topK   返回数量上限
+     * @return 截断后的分片列表
+     */
     private List<ChunkResponse> truncate(List<ChunkResponse> chunks, int topK) {
         if (chunks == null) {
             return null;
@@ -88,12 +97,20 @@ public class RerankClient {
 
     /**
      * 调用 qwen3-rerank API
+     * @param query  用户问题（用原始 query 而非改写后，保证精确名词不被改写破坏）
+     * @param chunks 候选分片
+     * @return API 响应体（JSON 字符串）
+     * @throws Exception 如果调用失败
+     * <p>注意：API 调用会阻塞当前线程，建议在异步上下文调用</p>
+     * <p>返回的 JSON 字符串包含每个文档的 relevance_score，用于后续排序</p>
+     * <p>返回的是每一段文档的分数，用于后续排序</p>
      */
     private String callRerankApi(String query, List<ChunkResponse> chunks) throws Exception {
         List<String> documents = chunks.stream()
                 .map(chunk -> chunk.getContent() != null ? chunk.getContent() : "")
                 .collect(Collectors.toList());
 
+        // 构建请求体
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("model", astraProperties.getRerank().getModel());
         requestBody.put("query", query);
@@ -101,8 +118,10 @@ public class RerankClient {
         requestBody.put("top_n", astraProperties.getRerank().getTopK());
         requestBody.put("instruct", RERANK_INSTRUCT);
 
+        // 序列化请求体为 JSON 字符串
         String jsonBody = objectMapper.writeValueAsString(requestBody);
 
+        // 构建 HTTP 请求
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(BASE_URL + RERANK_ENDPOINT))
                 .header("Authorization", "Bearer " + modelProperties.getApiKey())
@@ -127,6 +146,13 @@ public class RerankClient {
      * 解析响应，兼容两种格式：
      * 格式A（旧版/某些模型）: {"output": {"results": [...]}}
      * 格式B（qwen3-rerank）: {"results": [...]}
+     * @param responseJson API 响应体（JSON 字符串）
+     * @param chunks       候选分片
+     * @return 按 relevance_score 降序的结果
+     * @throws Exception 如果解析失败
+     * <p>注意：解析会修改原始分片列表，返回的是新列表</p>
+     * <p>把每个文档的 relevance_score 作为分数，对号入座到对应的分片中</p>
+     * <p>返回按 relevance_score 降序的结果</p>
      */
     @SuppressWarnings("unchecked")
     private List<ChunkResponse> parseRerankResult(String responseJson, List<ChunkResponse> chunks) throws Exception {

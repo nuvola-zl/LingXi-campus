@@ -3,7 +3,7 @@ package top.lingxi.campus.rag.parse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import top.lingxi.campus.rag.ingestion.IngestionPipeline;
-import top.lingxi.campus.rag.ingestion.MarkdownTextExtractor;
+import top.lingxi.campus.rag.ingestion.extractor.MarkdownTextExtractor;
 import top.lingxi.campus.rag.ingestion.TextSegment;
 
 import top.lingxi.campus.domain.ai.dto.ChunkResponse;

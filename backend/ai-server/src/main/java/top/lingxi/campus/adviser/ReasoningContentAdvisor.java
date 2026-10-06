@@ -33,11 +33,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.util.StringUtils;
 
-/**
- * @author yuluo
- * @author <a href="mailto:yuluo08290126@gmail.com">yuluo</a>
- * Incorporate DeepSeek-R1's reasoning content into the output
- */
+
 
 public class ReasoningContentAdvisor implements BaseAdvisor {
 

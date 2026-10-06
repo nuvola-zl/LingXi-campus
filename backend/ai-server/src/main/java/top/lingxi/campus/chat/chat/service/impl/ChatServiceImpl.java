@@ -2,22 +2,25 @@ package top.lingxi.campus.chat.chat.service.impl;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import reactor.core.publisher.Flux;
+import top.lingxi.campus.common.constant.PromptConstant;
 import top.lingxi.campus.itAgent.pipeline.ChatPipeline;
 import top.lingxi.campus.itAgent.agent.service.AgentDialogService;
 import top.lingxi.campus.chat.session.service.IChatSessionService;
 import top.lingxi.campus.common.context.BaseContext;
 import top.lingxi.campus.config.JdbcChatMemory;
 import top.lingxi.campus.itAgent.context.ChatContext;
-import top.lingxi.campus.itAgent.handler.HandlerRegistry;
-import top.lingxi.campus.itAgent.handler.IntentHandler;
+
 import top.lingxi.campus.chat.chat.service.IChatService;
-import top.lingxi.campus.ai.service.IIntentDetectionService;
+
 
 
 import java.time.DayOfWeek;
@@ -30,6 +33,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,10 +43,9 @@ import java.util.regex.Pattern;
 public class ChatServiceImpl implements IChatService {
 
     private final ChatPipeline chatPipeline;
-    private final HandlerRegistry handlerRegistry;
-    private final IIntentDetectionService intentDetectionService;
     private final JdbcChatMemory jdbcChatMemory;
     private final AgentDialogService agentDialogService;
+    private final RedissonClient redissonClient;
 
     // ========== 关键：注入 HR/行政的 ChatClient ==========
     private final ChatClient hrChatClient;
@@ -50,98 +53,153 @@ public class ChatServiceImpl implements IChatService {
     private final IChatSessionService chatSessionService;
 
     @Override
-    //@Transactional
     public Flux<String> textChat(String domain, Long groupId, Long sessionId, String prompt,
                                  Boolean enableThinking, Integer thinkingBudget, String model) {
 
+        //大小写兼容，统一转换为大写，再次兜底为 IT 分支"
         String upperDomain = domain != null ? domain.toUpperCase() : "IT";
-        log.info("========== domain分流: rawDomain={}, upperDomain={} ==========", domain, upperDomain);
 
-        // ========== HR 直接走 AI Tool 调用 ==========
+        //  HR 直接走 AI Tool 调用
         if ("HR".equals(upperDomain)) {
-            log.info("========== 进入HR分支 ==========");
             return handleDomainChat("HR", groupId, sessionId, prompt, hrChatClient,
                     enableThinking, thinkingBudget, model);
         }
 
-        // ========== 行政直接走 AI Tool 调用 ==========
+        //  行政直接走 AI Tool 调用
         if ("ADMIN".equals(upperDomain)) {
-            log.info("========== 进入ADMIN分支 ==========");
             return handleDomainChat("ADMIN", groupId, sessionId, prompt, adminChatClient,
                     enableThinking, thinkingBudget, model);
         }
 
-        // ========== IT 分支（改造后）==========
-        log.info("========== 进入IT分支 ==========");
-        ChatContext ctx = ChatContext.builder()
-                .domain(upperDomain)
-                .groupId(groupId)
-                .sessionId(sessionId)
-                .prompt(prompt)
-                .enableThinking(enableThinking)
-                .thinkingBudget(thinkingBudget)
-                .model(model)
-                .build();
+        //  IT 分支（v3：统一进入 Agent 状态机）
 
-        // 1. 前置处理：创建/复用会话 + 保存用户消息（所有分支共用）
-        chatPipeline.prepare(ctx);
-        Long finalSessionId = ctx.getFinalSessionId();
         Long userId = BaseContext.getCurrentId();
 
-        // 2. 新会话首条事件
-        Flux<String> initialFlux = ctx.isNewSession()
-                ? chatPipeline.emitSessionCreated(finalSessionId)
-                : Flux.empty();
-
-        // ===== 关键新增：Agent 多轮对话优先拦截 =====
-        // 如果用户已经在 Agent 状态机中（DIAGNOSING/COLLECTING/CONFIRMING），
-        // 直接继续对话，跳过意图识别，不受新消息意图干扰
-        if (agentDialogService.hasOngoingDialog(userId)) {
-            log.info("========== Agent对话继续: userId={}, sessionId={} ==========", userId, finalSessionId);
-            Flux<String> agentFlux = agentDialogService.continueDialog(userId, prompt, finalSessionId);
-            // 统一走 Pipeline 后置（保存 AI 消息、更新会话时间、生成标题）
-            Flux<String> wrappedFlux = chatPipeline.wrap(ctx, agentFlux);
-            return initialFlux.concatWith(wrappedFlux);
+        // [v3-fix] 每用户处理锁：上一条消息还没处理完时，新消息快速拒绝。
+        // 防止"基于旧快照并发处理"导致的答非所问（CAS 只保护写，保护不了过期读）
+        RLock processingLock = redissonClient.getLock("chat:processing:" + userId);
+        boolean acquired;
+        try {
+            // waitTime=0：不等待，拿不到锁就直接拒绝；leaseTime=60：崩溃时自动过期兜底
+            acquired = processingLock.tryLock(0, 60, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Flux.just("系统繁忙，请稍后再试。");
         }
-        // =============================================
+        if (!acquired) {
+            // 被拒的消息直接返回提示：不经过 prepare → 不落库、不进状态机、不产生会话，无痕
+            return Flux.just("上一条消息我还在处理哦，请稍等片刻再发～🔧");
+        }
 
+        Flux<String> result;
+        try {
+            ChatContext ctx = ChatContext.builder()
+                    .domain(upperDomain)
+                    .groupId(groupId)
+                    .sessionId(sessionId)
+                    .prompt(prompt)
+                    .enableThinking(enableThinking)
+                    .thinkingBudget(thinkingBudget)
+                    .model(model)
+                    .build();
+
+            // 1. 前置处理：创建/复用会话 + 保存用户消息（所有分支共用）
+            chatPipeline.prepare(ctx);
+
+            Long finalSessionId = ctx.getFinalSessionId();
+
+            // 2. 新会话首条事件
+            Flux<String> initialFlux = ctx.isNewSession()
+                    //新会话的首条响应会先推一个 SESSION_CREATED 标记，
+                    // 把后端生成的 sessionId 同步给前端，前端后续请求都带上它来维持对话连续性
+                    ? chatPipeline.emitSessionCreated(finalSessionId)
+                    : Flux.empty();
+
+            // 如果用户已经在 Agent 状态机中（DIAGNOSING/COLLECTING/CONFIRMING），
+            // 直接继续对话，跳过意图识别，不受新消息意图干扰
+            //if条件里面先获取一个当前用户的会话状态，判断是否有正在进行的对话流程，这个状态只有true和false
+            if (agentDialogService.hasOngoingDialog(userId)) {
+
+                // 从 Agent 状态机继续对话，返回一个 Flux<String>（还没执行）
+                //相当于返回一个说明书和一个标签，说明了当前状态可以做什么，以及做什么后会进入哪个状态，让其他方法执行对应的操作
+                Flux<String> agentFlux = agentDialogService.continueDialog(userId, prompt, finalSessionId);
+
+                // 统一走 Pipeline 后置（保存 AI 消息、更新会话时间、生成标题）
+                //再贴三层标签，根据不同的信号，执行不同的操作
+                // 1. 系统标记过滤
+                // 2. 全部吐完，把收集的内容存数据库
+                // 3. 出错了，推错误文案兜底
+                Flux<String> wrappedFlux = chatPipeline.wrap(ctx, agentFlux);
+
+                // 合并首条事件和 Agent 流
+                result = initialFlux.concatWith(wrappedFlux);
+            } else {
+                // 3. v3：IT 域所有请求统一进入 Agent 状态机
+                //    诊断/查单/催单/关单/建单/闲聊 全部由 Agent 的 LLM 决策 + 工具调用处理
+                log.info("========== 启动Agent对话: userId={}, sessionId={} ==========", userId, finalSessionId);
+                result = initialFlux.concatWith(
+                        chatPipeline.wrap(ctx, agentDialogService.startDialog(userId, prompt, finalSessionId)));
+            }
+        } catch (RuntimeException e) {
+            // prepare 等同步环节抛异常时手动释放，别让锁空等到 60 秒租约到期
+            processingLock.forceUnlock();
+            throw e;
+        }
+
+        // 4. 流结束（完成/出错/取消）时释放锁，之后用户才能发下一条
+        // 用 forceUnlock：加锁在 Tomcat 线程、释放可能在响应式线程，普通 unlock 会报线程不匹配
+        RLock lockToRelease = processingLock;
+        return result.doFinally(signal -> {
+            try {
+                if (lockToRelease.isLocked()) {
+                    lockToRelease.forceUnlock();
+                }
+            } catch (Exception ignored) {
+            }
+        });
+
+
+/*
         // 3. 意图识别（只有不在 Agent 流程中的请求才走）
         return intentDetectionService.analyzeIntentReactive(prompt, ctx.getDomain())
                 .flatMapMany(intent -> {
                     ctx.setIntent(intent);
-                    log.info("意图识别完成: intent={}, domain={}, categoryId={}",
-                            intent.getIntent(), intent.getDomain(), intent.getCategoryId());
+//                    log.info("意图识别完成: intent={}, domain={}, categoryId={}",
+//                            intent.getIntent(), intent.getDomain(), intent.getCategoryId());
 
-                    // ===== 跨域转接：IT 入口识别到 HR/Admin 需求时，切换通道 =====
-                    if (intent.getCategoryId() != null
-                            && (intent.getCategoryId() == 2 || intent.getCategoryId() == 3)) {
-                        log.info("========== 跨域转接: categoryId={} ==========", intent.getCategoryId());
-                        return handleCrossDomainTransfer(
-                                initialFlux, intent.getCategoryId(),
-                                ctx.getGroupId(), ctx.getFinalSessionId(), prompt, userId,
-                                ctx.getEnableThinking(), ctx.getThinkingBudget(), ctx.getModel());
-                    }
-                    // ========================================================
+//                    // ===== 跨域转接：IT 入口识别到 HR/Admin 需求时，切换通道 =====
+//                    if (intent.getCategoryId() != null
+//                            && (intent.getCategoryId() == 2 || intent.getCategoryId() == 3)) {
+//
+//                        return handleCrossDomainTransfer(
+//                                initialFlux, ctx, intent.getCategoryId(),
+//                                prompt, userId);
+//                    }
 
-                    // ===== 关键新增：ticket_create 走 Agent 流程 =====
                     if ("ticket_create".equals(intent.getIntent())) {
-                        log.info("========== 启动Agent对话: userId={}, sessionId={} ==========", userId, finalSessionId);
+
                         Flux<String> agentFlux = agentDialogService.startDialog(userId, prompt, finalSessionId);
+
                         Flux<String> wrappedFlux = chatPipeline.wrap(ctx, agentFlux);
+
                         return initialFlux.concatWith(wrappedFlux);
                     }
-                    // =================================================
+
 
                     // 4. 其他意图（ticket_query / knowledge_qa / image_generation / text 等）
                     // 继续走旧的 Handler 链
                     IntentHandler handler = handlerRegistry.findFirstMatch(ctx)
                             .orElseThrow(() -> new IllegalStateException("兜底 Handler 未注册"));
 
+
+                    // 5. 执行业务逻辑
                     Flux<String> responseFlux = handler.handle(ctx);
+
                     Flux<String> wrappedFlux = chatPipeline.wrap(ctx, responseFlux);
 
                     return initialFlux.concatWith(wrappedFlux);
                 });
+*/
     }
 
     /**
@@ -173,16 +231,27 @@ public class ChatServiceImpl implements IChatService {
 
         // 3. 查历史消息
         Long userId = BaseContext.getCurrentId();
+
         List<Message> history = jdbcChatMemory.getHistory(finalSessionId, 10);
+
+        if (!history.isEmpty()) {
+            Message last = history.get(history.size() - 1);
+            if (last instanceof UserMessage && prompt.equals(last.getText())) {
+                history.remove(history.size() - 1);
+            }
+        }
+
         log.info("========== 历史消息: count={} ==========", history.size());
 
         // 4. 构建运行时选项（默认 qwen-flash，不上思考）
         String actualModel = model != null ? model : "qwen-flash";
         boolean actualThinking = enableThinking != null && enableThinking;
+
         DashScopeChatOptions runtimeOptions = DashScopeChatOptions.builder()
                 .model(actualModel)
                 .enableThinking(actualThinking)
                 .build();
+
         if (actualThinking && thinkingBudget != null) {
             runtimeOptions.setMaxTokens(thinkingBudget);
         }
@@ -197,19 +266,18 @@ public class ChatServiceImpl implements IChatService {
 
         LocalDate nextMonday = today.with(TemporalAdjusters.next(DayOfWeek.MONDAY));
 
-        String timeContext = String.format(
-                "【当前时间上下文】现在时间是 %s（%s）%s。" +
-                "如果用户说'今天'，指 %s；'明天'指 %s；'后天'指 %s；'下周'指从 %s 开始的那一周。" +
-                "所有日期必须使用 yyyy-MM-dd 格式输出，禁止输出过去年份。当前用户ID：%d。",
+        // 选域 prompt 并填充占位符：7 个 %s + 1 个 %d，顺序必须和 TIME_BLOCK 对应
+        String systemText = String.format(
+                "HR".equals(domain) ? PromptConstant.HR_SYSTEM_PROMPT : PromptConstant.ADMIN_SYSTEM_PROMPT,
                 todayStr, weekDay, timeStr,
                 todayStr, today.plusDays(1), today.plusDays(2), nextMonday,
-                userId
-        );
+                userId);
+
 
         var promptBuilder = client.prompt()
                 .options(runtimeOptions)
-                .toolContext(Map.of("userId", userId))   // ← 关键：随请求传递，线程无关
-                .messages(new SystemMessage(timeContext));
+                .toolContext(Map.of("userId", userId))
+                .messages(new SystemMessage(systemText));
 
         for (Message msg : history) {
             promptBuilder.messages(msg);
@@ -229,7 +297,10 @@ public class ChatServiceImpl implements IChatService {
                 .doOnComplete(() -> {
                     String rawContent = contentBuilder.toString().trim();
                     if (!rawContent.isEmpty()) {
+
+                        // 6. 提取思考内容（如果有）
                         String reasoningContent = extractReasoningFromThinkTags(rawContent);
+                        // 7. 移除思考标签，保留回答内容
                         String cleanContent = removeThinkTags(rawContent);
 
                         Map<String, Object> metadata = new HashMap<>();
@@ -259,8 +330,15 @@ public class ChatServiceImpl implements IChatService {
      */
     private Flux<String> handleCrossDomainTransfer(
             Flux<String> initialFlux,
-            Long categoryId, Long groupId, Long sessionId, String prompt, Long userId,
-            Boolean enableThinking, Integer thinkingBudget, String model) {
+            ChatContext ctx,          // 【修复A-2】新增：IT 分支上下文，default 降级分支的 wrap 要用
+            Long categoryId, String prompt, Long userId) {
+
+        // 从 ctx 取原参数（保持原方法体逻辑不变）
+        Long groupId = ctx.getGroupId();
+        Long sessionId = ctx.getFinalSessionId();
+        Boolean enableThinking = ctx.getEnableThinking();
+        Integer thinkingBudget = ctx.getThinkingBudget();
+        String model = ctx.getModel();
 
         String categoryName;
         String targetDomain;
@@ -279,8 +357,12 @@ public class ChatServiceImpl implements IChatService {
             }
             default -> {
                 log.warn("跨域转接遇到未知分类: categoryId={}, 降级为IT处理", categoryId);
+                // 【修复A-2】降级分支补上 chatPipeline.wrap：
+                // 原来直接返回裸 agentFlux，AI 消息不落库、会话时间不更新，
+                // 与 ticket_create 分支行为不一致。
                 Flux<String> agentFlux = agentDialogService.startDialog(userId, prompt, sessionId);
-                return initialFlux.concatWith(agentFlux);
+                Flux<String> wrappedFlux = chatPipeline.wrap(ctx, agentFlux);
+                return initialFlux.concatWith(wrappedFlux);
             }
         }
 
@@ -318,8 +400,8 @@ public class ChatServiceImpl implements IChatService {
 
         String timeContext = String.format(
                 "【当前时间上下文】现在时间是 %s（%s）%s。" +
-                "如果用户说'今天'，指 %s；'明天'指 %s；'后天'指 %s；'下周'指从 %s 开始的那一周。" +
-                "所有日期必须使用 yyyy-MM-dd 格式输出，禁止输出过去年份。当前用户ID：%d。",
+                        "如果用户说'今天'，指 %s；'明天'指 %s；'后天'指 %s；'下周'指从 %s 开始的那一周。" +
+                        "所有日期必须使用 yyyy-MM-dd 格式输出，禁止输出过去年份。当前用户ID：%d。",
                 todayStr, weekDay, timeStr,
                 todayStr, today.plusDays(1), today.plusDays(2), nextMonday,
                 userId

@@ -1,4 +1,4 @@
-package top.lingxi.campus.itAgent.agent.search;
+package top.lingxi.campus.rag.file.service.impl;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import lombok.RequiredArgsConstructor;

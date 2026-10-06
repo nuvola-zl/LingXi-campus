@@ -124,4 +124,12 @@ public interface DeviceRequestService {
 
     /** 管理员确认归还入库：设备重新入库 + 库存回补 + 归还记录 + 申领单更新 */
     void confirmReturn(Long returnId, String remark);
+
+    /**
+     * 按单号查询【当前用户自己的】申领单（供 AI 工具调用，防越权）
+     * @param requestNo 申领单号，不可为空
+     * @param userId  当前用户 ID，不可为空
+     * @return 申领记录实体，若不存在则返回 null
+     */
+    AdminDeviceRequest getOwnByRequestNo(String requestNo, Long userId);
 }

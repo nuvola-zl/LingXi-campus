@@ -71,11 +71,16 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
 
         // 2. 获取或创建会话
         ChatSession session = getOrCreateSession(userId, request.getLibraryId(), request.getSessionId());
+
+
+        // 会话创建事件包含会话 ID，用于后续消息关联
         AstraChatEvent sessionCreatedEvent = AstraChatEvent.sessionCreated(session.getId());
+
         log.info("【CHAT-SVC】会话创建完成 | sessionId={}, cost={}ms", session.getId(), System.currentTimeMillis() - t0);
 
         // 3. 混合检索（含反馈库时复用同一次重写/Embedding）
         long t1 = System.currentTimeMillis();
+
         List<ChunkResponse> searchResults;
         try {
             searchResults = feedbackProperties.getSearch().isEnabled()
@@ -105,6 +110,7 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
         List<String> citations = rerankedResults.stream()
                 .map(ChunkResponse::getSource)
                 .filter(Objects::nonNull)
+                //去重，避免重复的页数引用
                 .distinct()
                 .collect(Collectors.toList());
 
@@ -133,28 +139,6 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
                 .doOnError(e -> log.error("【CHAT-SVC】流式输出异常 | totalCost={}ms", System.currentTimeMillis() - t0, e));
     }
 
-    // ==================== 文件直传对话 ====================
-
-    @Override
-    public Flux<AstraChatEvent> chatWithFile(Long userId, AstraChatRequest request) {
-        long t0 = System.currentTimeMillis();
-        log.info("【CHAT-SVC】文件直传分支 | userId={}, libraryId={}", userId, request.getLibraryId());
-
-        // 仅需要会话上下文，不做知识库权限校验（与旧实现行为一致）
-        ChatSession session = getOrCreateSession(userId, request.getLibraryId(), request.getSessionId());
-
-        Flux<AstraChatEvent> answerFlux = astraClient.prompt()
-                .user(request.getPrompt())
-                .stream()
-                .content()
-                .map(AstraChatEvent::answer);
-
-        return Flux.concat(
-                Flux.just(AstraChatEvent.sessionCreated(session.getId())),
-                answerFlux,
-                Flux.just(AstraChatEvent.complete(session.getId(), List.of()))
-        ).doOnComplete(() -> log.info("【CHAT-SVC】文件直传分支完成 | totalCost={}ms", System.currentTimeMillis() - t0));
-    }
 
     // ==================== 检索 ====================
 
@@ -162,6 +146,7 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
     public List<ChunkResponse> hybridSearch(Long libraryId, String query, int topK) {
         log.debug("混合检索: libraryId={}, query={}", libraryId, query);
 
+        // 获取分片总数，检查知识库是否为空
         long chunkCount = chunkMapper.countByLibraryId(libraryId);
         if (chunkCount == 0) {
             throw new BusinessException(ErrorCode.ASTRA_LIBRARY_EMPTY);
@@ -170,35 +155,7 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
         return doHybridSearch(List.of(libraryId), libraryId, query, topK);
     }
 
-    /**
-     * 联合检索：官方库 + 同名反馈库
-     *
-     * 重构：原实现调用两次完整 hybridSearch（两次 Query 重写 + 两次 Embedding +
-     * 两次 RRF SQL），现改为：
-     * 1. Query 重写一次、Embedding 一次
-     * 2. 目标库集合（主库 + 反馈库）一次 IN 查询，RRF 在 SQL 层统一融合
-     * 3. 反馈库分片在结果映射时打 [反馈] 标记
-     */
-    private List<ChunkResponse> hybridSearchWithFeedback(Long libraryId, String query, int topK) {
-        // 主库为空直接返回空库提示（保持旧行为）
-        if (chunkMapper.countByLibraryId(libraryId) == 0) {
-            throw new BusinessException(ErrorCode.ASTRA_LIBRARY_EMPTY);
-        }
 
-        // 目标库集合：主库 + 同名反馈库
-        List<Long> libraryIds = new ArrayList<>();
-        libraryIds.add(libraryId);
-
-        KbLibrary mainLib = libraryMapper.selectById(libraryId);
-        if (mainLib != null) {
-            KbLibrary feedbackLib = libraryMapper.selectByName(mainLib.getName() + "_feedback");
-            if (feedbackLib != null) {
-                libraryIds.add(feedbackLib.getId());
-            }
-        }
-
-        return doHybridSearch(libraryIds, libraryId, query, topK);
-    }
 
     /**
      * 混合检索公共实现：一次重写 + 一次 Embedding + 一次 RRF SQL
@@ -220,8 +177,11 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
         float[] queryEmbedding = embeddingModel.embed(rewrittenQuery);
 
         // 3. 一次 RRF 混合检索（IN 查询，SQL 层融合）
+        //全部转小写，避免大小写敏感问题，合并多个空格为一个
         String queryTerms = rewrittenQuery.toLowerCase().replaceAll("\\s+", " ");
+
         AstraProperties.Search search = astraProperties.getSearch();
+
         List<KbChunkSearchResult> results = chunkMapper.hybridSearchRrf(
                 libraryIds, queryEmbedding, queryTerms,
                 search.getTopK().getVector(), search.getTopK().getBm25(),
@@ -239,6 +199,63 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
                 .collect(Collectors.toList());
     }
 
+
+    /**
+     * 检索结果 → ChunkResponse，反馈库分片打 [反馈] 标记
+     */
+    private ChunkResponse toChunkResponse(KbChunkSearchResult result, Long mainLibraryId) {
+        // 从元数据提取来源标识，若无则默认"未知"
+        //答案溯源
+        String source = extractSource(result.getMetadata());
+
+        // 标记反馈库分片，目前已关闭，不使用
+        if (mainLibraryId != null && !mainLibraryId.equals(result.getLibraryId())) {
+            source = source != null ? "[反馈] " + source : "[反馈知识]";
+        }
+
+        ChunkResponse response = ChunkResponse.builder()
+                .id(result.getId())
+                .libraryId(result.getLibraryId())
+                .mediaId(result.getMediaId())
+                .content(result.getContent())
+                .chunkIndex(result.getChunkIndex())
+                .metadata(result.getMetadata())
+                .source(source)
+                .build();
+
+        if (result.getRrfScore() != null) {
+            response.setScore(result.getRrfScore().floatValue());
+        }
+        if (result.getVectorScore() != null) {
+            response.setVectorScore(result.getVectorScore().floatValue());
+        }
+        if (result.getBm25Score() != null) {
+            response.setBm25Score(result.getBm25Score().floatValue());
+        }
+        return response;
+    }
+
+    /**
+     * 从元数据提取来源标识：文件名-第N页 / 文件名
+     */
+    private String extractSource(Map<String, Object> metadata) {
+        if (metadata == null) {
+            return null;
+        }
+        Object fileName = metadata.get("fileName");
+        Object page = metadata.get("page");
+        if (fileName != null && page != null) {
+            return fileName + "-第" + page + "页";
+        }
+        if (fileName != null) {
+            return fileName.toString();
+        }
+        return null;
+    }
+
+
+
+
     /**
      * 上下文扩展 - 按文档合并连续命中的 chunk，避免 Prompt 重复
      * 核心逻辑：
@@ -246,7 +263,6 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
      * 2. 每组内按 chunkIndex 排序，合并连续区间（如 5,6,7 → [5,7]）
      * 3. 每个区间一次性查询 [起点-1, 终点+1] 的邻居，和区间内 chunk 合并去重
      * 4. 按 chunkIndex 顺序拼接成"超级 chunk"
-     *
      * 重构：区间内内容用 Map O(1) 查找（原为 O(n²) 流式 filter）；
      * 邻居查询由每区间 2 次合并为 1 次；新增跨区间去重（consumed 集合），
      * 避免相邻两个区间重复带上同一邻居 chunk。
@@ -356,6 +372,59 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
         return expanded;
     }
 
+    // ==================== 文件直传对话 ====================
+
+    @Override
+    public Flux<AstraChatEvent> chatWithFile(Long userId, AstraChatRequest request) {
+        long t0 = System.currentTimeMillis();
+        log.info("【CHAT-SVC】文件直传分支 | userId={}, libraryId={}", userId, request.getLibraryId());
+
+        // 仅需要会话上下文，不做知识库权限校验（与旧实现行为一致）
+        ChatSession session = getOrCreateSession(userId, request.getLibraryId(), request.getSessionId());
+
+        Flux<AstraChatEvent> answerFlux = astraClient.prompt()
+                .user(request.getPrompt())
+                .stream()
+                .content()
+                .map(AstraChatEvent::answer);
+
+        return Flux.concat(
+                Flux.just(AstraChatEvent.sessionCreated(session.getId())),
+                answerFlux,
+                Flux.just(AstraChatEvent.complete(session.getId(), List.of()))
+        ).doOnComplete(() -> log.info("【CHAT-SVC】文件直传分支完成 | totalCost={}ms", System.currentTimeMillis() - t0));
+    }
+
+    /**
+     * 联合检索：官方库 + 同名反馈库
+     *
+     * 重构：原实现调用两次完整 hybridSearch（两次 Query 重写 + 两次 Embedding +
+     * 两次 RRF SQL），现改为：
+     * 1. Query 重写一次、Embedding 一次
+     * 2. 目标库集合（主库 + 反馈库）一次 IN 查询，RRF 在 SQL 层统一融合
+     * 3. 反馈库分片在结果映射时打 [反馈] 标记
+     */
+    private List<ChunkResponse> hybridSearchWithFeedback(Long libraryId, String query, int topK) {
+        // 主库为空直接返回空库提示（保持旧行为）
+        if (chunkMapper.countByLibraryId(libraryId) == 0) {
+            throw new BusinessException(ErrorCode.ASTRA_LIBRARY_EMPTY);
+        }
+
+        // 目标库集合：主库 + 同名反馈库
+        List<Long> libraryIds = new ArrayList<>();
+        libraryIds.add(libraryId);
+
+        KbLibrary mainLib = libraryMapper.selectById(libraryId);
+        if (mainLib != null) {
+            KbLibrary feedbackLib = libraryMapper.selectByName(mainLib.getName() + "_feedback");
+            if (feedbackLib != null) {
+                libraryIds.add(feedbackLib.getId());
+            }
+        }
+
+        return doHybridSearch(libraryIds, libraryId, query, topK);
+    }
+
     // ==================== ReRank（委托 RerankClient） ====================
 
     @Override
@@ -453,8 +522,27 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
         }
     }
 
-    // ==================== 会话 ====================
 
+    // ==================== 内部工具方法 ====================
+
+//    /**
+//     * 知识库访问权限校验：仅所有者可问答
+//     * 注意：与 AstraMediaServiceImpl 的校验规则保持一致；
+//     * 若未来支持 team 类型库共享，在此扩展规则。
+//     */
+//    private void checkLibraryPermission(KbLibrary library, Long userId) {
+//        if (!library.getOwnerId().equals(userId)) {
+//            throw new BusinessException(ErrorCode.FORBIDDEN, "无权限访问该知识库");
+//        }
+//    }
+
+
+
+
+
+    /**
+     * 获取或创建会话
+     */
     @Override
     public ChatSession getOrCreateSession(Long userId, Long libraryId, Long sessionId) {
         if (sessionId != null) {
@@ -474,65 +562,4 @@ public class AstraSearchServiceImpl implements IAstraSearchService {
         return chatSessionService.createSession(userId, "astra", title);
     }
 
-    // ==================== 内部工具方法 ====================
-
-//    /**
-//     * 知识库访问权限校验：仅所有者可问答
-//     * 注意：与 AstraMediaServiceImpl 的校验规则保持一致；
-//     * 若未来支持 team 类型库共享，在此扩展规则。
-//     */
-//    private void checkLibraryPermission(KbLibrary library, Long userId) {
-//        if (!library.getOwnerId().equals(userId)) {
-//            throw new BusinessException(ErrorCode.FORBIDDEN, "无权限访问该知识库");
-//        }
-//    }
-
-    /**
-     * 检索结果 → ChunkResponse，反馈库分片打 [反馈] 标记
-     */
-    private ChunkResponse toChunkResponse(KbChunkSearchResult result, Long mainLibraryId) {
-        String source = extractSource(result.getMetadata());
-        if (mainLibraryId != null && !mainLibraryId.equals(result.getLibraryId())) {
-            source = source != null ? "[反馈] " + source : "[反馈知识]";
-        }
-
-        ChunkResponse response = ChunkResponse.builder()
-                .id(result.getId())
-                .libraryId(result.getLibraryId())
-                .mediaId(result.getMediaId())
-                .content(result.getContent())
-                .chunkIndex(result.getChunkIndex())
-                .metadata(result.getMetadata())
-                .source(source)
-                .build();
-
-        if (result.getRrfScore() != null) {
-            response.setScore(result.getRrfScore().floatValue());
-        }
-        if (result.getVectorScore() != null) {
-            response.setVectorScore(result.getVectorScore().floatValue());
-        }
-        if (result.getBm25Score() != null) {
-            response.setBm25Score(result.getBm25Score().floatValue());
-        }
-        return response;
-    }
-
-    /**
-     * 从元数据提取来源标识：文件名-第N页 / 文件名
-     */
-    private String extractSource(Map<String, Object> metadata) {
-        if (metadata == null) {
-            return null;
-        }
-        Object fileName = metadata.get("fileName");
-        Object page = metadata.get("page");
-        if (fileName != null && page != null) {
-            return fileName + "-第" + page + "页";
-        }
-        if (fileName != null) {
-            return fileName.toString();
-        }
-        return null;
-    }
 }

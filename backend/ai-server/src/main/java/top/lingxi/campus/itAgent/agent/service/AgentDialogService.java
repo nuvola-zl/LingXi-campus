@@ -33,7 +33,6 @@ public class AgentDialogService {
     private static final String REDIS_KEY_PREFIX = "agent_dialog:";
     private static final long REDIS_TTL = 30;
 
-    // ==================== 新增：Lua CAS 脚本 ====================
     /**
      * 原子性 CAS 更新：
      * KEYS[1] = stateKey, KEYS[2] = verKey
@@ -64,12 +63,30 @@ public class AgentDialogService {
 
     // ==================== 状态查询 ====================
 
+
+    //
+//    DIAGNOSING   诊断中（在查知识库、给建议）
+//    COLLECTING   收集描述中（在追问用户）
+//    CONFIRMING   等用户确认工单
+//    COMPLETED    已完成/已取消（对话结束了）
     public boolean hasOngoingDialog(Long userId) {
         TicketCreateState state = getState(userId);
         if (state == null) return false;
-        return !"COMPLETED".equals(state.getStatus());  // ← 新增：已完成的不算进行中
+        return !"COMPLETED".equals(state.getStatus());
     }
 
+    /**
+     * 读取 Agent 状态。
+     *
+     * 版本号约定（重构后）：
+     * - verKey 是版本号的唯一权威来源；
+     * - JSON 里也存 version，仅作 verKey 丢失时的兜底，正常路径会被 verKey 覆盖。
+     *
+     * 为什么读取时仍要覆盖一次？
+     * 1. 兼容升级期间的老数据：旧代码保存的 JSON 中 version 可能滞后于 verKey；
+     * 2. 防御未来有人绕过 saveStateCas 直接写 stateKey。
+     * 覆盖操作成本极低（一次 GET），换来"任何情况下版本都对得上"。
+     */
     public TicketCreateState getState(Long userId) {
         String key = REDIS_KEY_PREFIX + userId;
         String json = redisTemplate.opsForValue().get(key);
@@ -77,14 +94,13 @@ public class AgentDialogService {
         try {
             TicketCreateState state = objectMapper.readValue(json, TicketCreateState.class);
 
-            // 【关键修复】从 verKey 读取真实版本号，覆盖 JSON 里的旧 version
             String verKey = REDIS_KEY_PREFIX + userId + ":ver";
             String verStr = redisTemplate.opsForValue().get(verKey);
             if (verStr != null) {
+                // verKey 优先：它是 Lua incr 维护的权威版本
                 state.setVersion(Integer.parseInt(verStr));
-            }
-            // 如果 verKey 不存在（异常情况），至少保证 version 非负
-            else if (state.getVersion() < 0) {
+            } else if (state.getVersion() < 0) {
+                // verKey 丢失的异常情况：至少保证非负，不阻断流程
                 state.setVersion(0);
             }
 
@@ -102,15 +118,17 @@ public class AgentDialogService {
         redisTemplate.delete(verKey);
     }
 
-    // ==================== 启动新对话 ====================
+
 
     public Flux<String> startDialog(Long userId, String prompt, Long sessionId) {
+        // 清除旧状态
         clearState(userId);
 
         DialogContext ctx = new DialogContext();
         ctx.setUserId(userId);
         ctx.setSessionId(sessionId);
 
+        // 初始化状态，设置为诊断中
         TicketCreateState state = new TicketCreateState();
         state.setStatus("DIAGNOSING");
         state.setSessionId(sessionId);
@@ -127,10 +145,13 @@ public class AgentDialogService {
 
         AgentStateMachine machine = createMachine("DIAGNOSING");
 
-        // 关键改造：doFinally 捕获 onComplete / onError / cancel 三种信号
+        // doFinally 捕获 onComplete / onError / cancel 三种信号
+        // 让状态机去执行，不断的返回结果
         return machine.process(ctx, prompt)
+                //拿到这个返回的Flux<String>说明书，
                 .doFinally(signal -> {
                     log.info("[AgentDialogService] startDialog 流结束, signal={}, userId={}", signal, userId);
+                    //贴上一个标签，根据不同的信号，执行不同的操作
                     afterProcess(userId, ctx);
                 });
     }
@@ -155,16 +176,22 @@ public class AgentDialogService {
 
         AgentStateMachine machine = createMachine(state.getStatus());
 
-        // 关键改造：doFinally 确保取消/异常/完成都走 afterProcess
+        // doFinally 确保取消/异常/完成都走 afterProcess
+        //让状态机去执行，不断的返回结果
         return machine.process(ctx, prompt)
+                //拿到这个返回的Flux<String>说明书，
                 .doFinally(signal -> {
                     log.info("[AgentDialogService] continueDialog 流结束, signal={}, userId={}", signal, userId);
+                    //贴上一个标签，根据不同的信号，执行不同的操作
                     afterProcess(userId, ctx);
                 });
     }
 
-    // ==================== 内部方法 ====================
 
+
+    /**
+     * 创建状态机，根据初始状态配置状态。
+     */
     private AgentStateMachine createMachine(String initialState) {
         Map<String, DialogState> states = new HashMap<>();
         states.put("DIAGNOSING", diagnosingState);
@@ -189,7 +216,7 @@ public class AgentDialogService {
             if (!saved) {
                 log.error("[AgentDialogService] 状态保存冲突，可能并发操作: userId={}", userId);
                 // 冲突时状态不保存，下次请求会读到旧版本，用户需要重新描述
-                // 也可以在这里选择重试 3 次，但简历项目保持简洁
+                // 也可以在这里选择重试 3 次，
             } else {
                 log.info("Agent状态已保存: userId={}, status={}, version={}",
                         userId, ctx.getState().getStatus(), ctx.getState().getVersion());
@@ -198,31 +225,50 @@ public class AgentDialogService {
     }
 
     /**
-     * 原子性 CAS 保存：用 Redis Lua 脚本保证 get-check-set 原子
+     * 原子性 CAS 保存（重构版）。
+     *
+     * 【重构说明】原实现先序列化 JSON 再执行 Lua，导致 JSON 里的 version
+     * 永远比 verKey 少 1，读取方不得不做版本覆盖来打补丁。
+     * 现在改为"先升版本、再序列化"，让 JSON 和 verKey 天然一致：
+     *
+     *   记录旧版本 expectedVer → 内存 version +1 → 序列化 JSON（含新版本）
+     *   → Lua：verKey == expectedVer 才写入，并 incr verKey 到同一新版本
+     *
+     * CAS 失败/异常时把内存版本回滚到 expectedVer，维持"内存版本 == verKey"不变式。
      */
     private boolean saveStateCas(Long userId, TicketCreateState state) {
         String stateKey = REDIS_KEY_PREFIX + userId;
         String verKey = REDIS_KEY_PREFIX + userId + ":ver";
+        int expectedVer = state.getVersion();      // ① 读取时的旧版本（CAS 比较基准）
         try {
+            // ② 先升内存版本：JSON 和 Lua incr 后的 verKey 都将是这个新版本
+            state.setVersion(expectedVer + 1);
+
+            // ③ 序列化（此刻 JSON 里的 version 就是新版本）
             String json = objectMapper.writeValueAsString(state);
+
+            // ④ Lua CAS：verKey 仍等于旧版本才允许写入，incr 后正好是新版本
             Long result = redisTemplate.execute(
                     casSaveScript,
                     Arrays.asList(stateKey, verKey),
-                    String.valueOf(state.getVersion()),
+                    String.valueOf(expectedVer),          // expectedVer = 旧版本
                     json,
-                    String.valueOf(REDIS_TTL * 60) // 30 分钟转秒
+                    String.valueOf(REDIS_TTL * 60)        // 30 分钟转秒
             );
 
             if (result != null && result == 1) {
-                // 保存成功，内存中的 version 也要 +1，和 Redis 保持一致
-                state.setVersion(state.getVersion() + 1);
+                // 保存成功：内存 / JSON / verKey 三方同版本，一致
                 return true;
             } else {
+                // CAS 冲突：回滚内存版本，维持不变式
+                state.setVersion(expectedVer);
                 log.warn("[AgentDialogService] CAS 保存失败，version 冲突: userId={}, expectedVer={}",
-                        userId, state.getVersion());
+                        userId, expectedVer);
                 return false;
             }
         } catch (Exception e) {
+            // 序列化或 Redis 异常：同样回滚内存版本
+            state.setVersion(expectedVer);
             log.error("Agent状态保存失败", e);
             return false;
         }

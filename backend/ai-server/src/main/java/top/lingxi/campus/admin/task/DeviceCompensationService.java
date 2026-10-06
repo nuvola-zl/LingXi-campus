@@ -2,6 +2,7 @@ package top.lingxi.campus.admin.task;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -15,17 +16,14 @@ import top.lingxi.campus.domain.admin.mapper.AdminDeviceRequestMapper;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class DeviceCompensationService {
 
-    @Autowired
-    private AdminDeviceRequestMapper requestMapper;
+    private final AdminDeviceInventoryMapper inventoryMapper;
 
-    @Autowired
-    private AdminDeviceInventoryMapper inventoryMapper;
+    private final AdminDeviceDetailMapper detailMapper;
 
-    @Autowired
-    private AdminDeviceDetailMapper detailMapper;
-
+    private final AdminDeviceRequestMapper requestMapper;
     /**
      * 补偿失败申领单的资源：释放设备 + 回滚库存
      * 幂等设计：重复执行无副作用

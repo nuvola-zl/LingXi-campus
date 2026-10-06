@@ -4,24 +4,18 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Supplier;
 
 /**
  * 工具调用统一网关（安全 + 治理收敛入口）
- *
  * 设计说明（对应生产实践的"工具调用拦截链路"轻量落地）：
  * 1. 统一审计：谁调用了什么工具、入参、耗时、结果长度，一条日志全记录
  * 2. 异常兜底：工具抛异常不再直接炸给框架，翻译为友好提示由 LLM 转述
  * 3. 超时保护：默认 10 秒，超时返回兜底文案（注：Java 线程不能真正中断，
  *    超时后原线程仍会在后台跑完，此处保护的是"用户侧不卡死"）
  * 4. 留扩展点：限流、熔断可在本类按工具名维度添加
- *
- * ⚠️ 调用约定：工具方法内若用到 ThreadLocal 上下文（如 BaseContext 的用户 ID），
+ * 调用约定：工具方法内若用到 ThreadLocal 上下文（如 BaseContext 的用户 ID），
  * 必须在提交 lambda 之前捕获，因为 lambda 在网关线程池执行。
  */
 @Slf4j
@@ -60,9 +54,15 @@ public class ToolCallGateway {
             return result;
 
         } catch (CompletionException e) {
-            // orTimeout 触发 TimeoutException 包装在 CompletionException 中
-            log.error("[ToolGateway] 调用超时(>{}s): tool={}", DEFAULT_TIMEOUT_SECONDS, toolName);
-            return "操作处理时间较长，请稍后重试或联系管理员。";
+            // join() 会把所有异常都包装成 CompletionException，必须看 cause 区分
+            Throwable cause = e.getCause();
+            if (cause instanceof TimeoutException) {
+                log.error("[ToolGateway] 调用超时(>{}s): tool={}", DEFAULT_TIMEOUT_SECONDS, toolName);
+                return "操作处理时间较长，请稍后重试或联系管理员。";
+            }
+            // 工具内部业务异常（参数错/空指针/SQL错误等），原文案会误导用户
+            log.error("[ToolGateway] 工具执行异常: tool={}", toolName, cause);
+            return "系统繁忙，请稍后重试";
         } catch (Exception e) {
             log.error("[ToolGateway] 调用异常: tool={}", toolName, e);
             return "系统繁忙，请稍后重试";

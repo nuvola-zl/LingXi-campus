@@ -9,6 +9,7 @@ import top.lingxi.campus.domain.ai.entity.KbChunk;
 import top.lingxi.campus.domain.ai.entity.KbMedia;
 import top.lingxi.campus.domain.ai.mapper.KbMediaMapper;
 import top.lingxi.campus.infra.oss.AliOssUtil;
+import top.lingxi.campus.rag.ingestion.extractor.DocumentTextExtractor;
 import top.lingxi.campus.rag.parse.ChunkingService;
 import top.lingxi.campus.rag.vector.HybridVectorStore;
 
@@ -85,6 +86,7 @@ public class IngestionPipeline {
 
         // 3. 结构化文本提取（PDF 按页携带 page 元数据）
         DocumentTextExtractor extractor = extractorFactory.getExtractor(message.getFileType());
+
         if (extractor == null) {
             throw new IngestionException("不支持的文件类型: " + message.getFileType());
         }

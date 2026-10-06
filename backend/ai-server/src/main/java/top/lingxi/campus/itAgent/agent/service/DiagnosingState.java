@@ -22,9 +22,12 @@ public class DiagnosingState implements DialogState {
 
     private final ToolRegistry toolRegistry;
 
-    public DiagnosingState(AgentOrchestrator orchestrator, ToolRegistry toolRegistry) {
+    private final ConfirmDataPreparer confirmDataPreparer;
+
+    public DiagnosingState(AgentOrchestrator orchestrator, ToolRegistry toolRegistry, ConfirmDataPreparer confirmDataPreparer) {
         this.orchestrator = orchestrator;
         this.toolRegistry = toolRegistry;
+        this.confirmDataPreparer = confirmDataPreparer;
     }
 
     @Override
@@ -52,7 +55,8 @@ public class DiagnosingState implements DialogState {
                 .flatMapMany(decision -> {
                     log.info("[DiagnosingState] 执行决策: action={}, target={}, reasoning={}",
                             decision.action(), decision.targetState(), decision.reasoning());
-                    return executeDecision(ctx, decision);
+                    // 4. 执行决策
+                    return executeDecision(ctx,userMessage, decision);
                 })
                 .onErrorResume(e -> {
                     log.error("[DiagnosingState] Orchestrator 异常，降级建单", e);
@@ -62,10 +66,12 @@ public class DiagnosingState implements DialogState {
 
     // ==================== 决策执行器（纯执行，无判断逻辑）====================
 
-    private Flux<AgentEvent> executeDecision(DialogContext ctx, AgentDecision d) {
+    private Flux<AgentEvent> executeDecision(DialogContext ctx, String userMessage, AgentDecision d) {
         // RESPOND：直接回复，保持在 DIAGNOSING（等待用户下一轮反馈）
         if (d.isRespond()) {
+            // 1. 回复内容为空时，默认反问
             String content = d.content() != null ? d.content() : "请问还有其他问题吗？";
+            // 2. 记录回复历史
             ctx.getState().addHistory("ai", content);
 
             // 关键：如果本轮有 Observation（知识库结果），把建议持久化到 state
@@ -85,10 +91,15 @@ public class DiagnosingState implements DialogState {
         if (d.isTransition()) {
             String content = d.content() != null ? d.content() : "好的，请继续。";
             ctx.getState().addHistory("ai", content);
-            return Flux.just(
-                    AgentEvent.respond(content),
-                    AgentEvent.transition(d.targetState())
-            );
+
+            if ("CONFIRMING".equals(d.targetState())) {
+                confirmDataPreparer.prepareIfAbsent(ctx.getState(), userMessage, d.ticketTitle());
+                // [v3-fix] 话术必须带确认引导，缺了就补
+                if (!content.contains("确认")) {
+                    content = "信息我已经整理好啦～确认无误请回复'确认'，需要修改直接告诉我哦！";
+                }
+            }
+            return Flux.just(AgentEvent.respond(content), AgentEvent.transition(d.targetState()));
         }
 
         // TOOL_CALL：调用工具，状态机自循环后会再次回调本状态

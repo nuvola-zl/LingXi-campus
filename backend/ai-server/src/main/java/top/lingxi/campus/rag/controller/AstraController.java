@@ -41,12 +41,14 @@ public class AstraController {
     private final IAstraLibraryService libraryService;
     private final IAstraSearchService searchService;
 
+    //规定这个接口返回的 Content-Type 是 text/event-stream，用于 SSE 事件流
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "知识库问答(SSE)", description = "type=RAG 走检索增强问答；type=FILE_UPLOAD 直传文件内容对话")
     public SseEmitter chat(@Valid @RequestBody AstraChatRequest request) {
         Long userId = BaseContext.getCurrentId();
 
         // 路由：显式 type 优先，兼容旧前端的 prompt 标记嗅探
+        //判断是否是文件直传对话
         Flux<AstraChatEvent> events = isFileUploadChat(request)
                 ? searchService.chatWithFile(userId, request)
                 : searchService.chat(userId, request);

@@ -1,6 +1,7 @@
 package top.lingxi.campus.hr.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,16 +19,14 @@ import java.time.LocalTime;
 import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class MeetingRoomServiceImpl implements MeetingRoomService {
 
-    @Autowired
-    private AdminMeetingRoomMapper roomMapper;
+    private final AdminMeetingRoomMapper roomMapper;
 
-    @Autowired
-    private AdminMeetingRoomBookingMapper bookingMapper;
+    private final AdminMeetingRoomBookingMapper bookingMapper;
 
-    @Autowired
-    private SerialNumberService serialService;
+    private final SerialNumberService serialService;
 
     /**
      * 查询所有可用会议室
@@ -130,15 +129,18 @@ public class MeetingRoomServiceImpl implements MeetingRoomService {
     /**
      * 按单号取消预定（供 AI 工具调用）
      */
+    @Override
     @Transactional
-    public void cancelBookingByNo(String bookingNo) {
+    public void cancelBookingByNo(Long userId, String bookingNo) {
         QueryWrapper<AdminMeetingRoomBooking> wrapper = new QueryWrapper<>();
-        wrapper.eq("booking_no", bookingNo);
+        // 【安全修复】查询条件加 user_id：只能取消自己的预定
+        wrapper.eq("booking_no", bookingNo).eq("user_id", userId);
         AdminMeetingRoomBooking booking = bookingMapper.selectOne(wrapper);
 
         if (booking == null) {
+            // 统一文案：不区分"单号不存在"和"是别人的单"，避免泄露单号存在性
             throw new BusinessException(ErrorCode.PARAM_ERROR,
-                    "预定单号不存在，请检查单号是否正确。");
+                    "未找到该预定单，请检查单号是否正确。");
         }
         if (booking.getStatus() != 1) {
             throw new BusinessException(ErrorCode.PARAM_ERROR,
@@ -146,7 +148,7 @@ public class MeetingRoomServiceImpl implements MeetingRoomService {
                             "，无法取消。只有有效的预定可以取消。");
         }
 
-        booking.setStatus(2); // 已取消
+        booking.setStatus(2);
         bookingMapper.updateById(booking);
     }
 

@@ -1,4 +1,6 @@
-package top.lingxi.campus.rag.ingestion;
+package top.lingxi.campus.rag.ingestion.extractor;
+
+import top.lingxi.campus.rag.ingestion.TextSegment;
 
 import java.util.List;
 

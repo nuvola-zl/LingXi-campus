@@ -102,7 +102,7 @@ public interface MeetingRoomService {
      * @throws RuntimeException 若预定单号不存在或已取消
      */
     @Transactional
-    void cancelBookingByNo(String bookingNo);
+    void cancelBookingByNo(Long userId, String bookingNo);
 
 
 

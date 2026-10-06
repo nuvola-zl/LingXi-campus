@@ -3,7 +3,7 @@ package top.lingxi.campus.itAgent.agent.tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import top.lingxi.campus.itAgent.agent.search.HydeSearchService;
+import top.lingxi.campus.rag.file.service.impl.HydeSearchService;
 import top.lingxi.campus.rag.service.IAstraSearchService;
 import top.lingxi.campus.domain.ai.dto.ChunkResponse;
 

@@ -2,7 +2,6 @@ package top.lingxi.campus.itAgent.context;
 
 import lombok.Builder;
 import lombok.Data;
-import top.lingxi.campus.result.IntentDetectionResult;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -45,9 +44,6 @@ public class ChatContext {
 
     /** 是否是本次请求新创建的会话 */
     private boolean newSession;
-
-    /** 意图识别结果（由 Handler 链前置步骤填充） */
-    private IntentDetectionResult intent;
 
     /**
      * Handler 显式设置的要保存的完整回复内容

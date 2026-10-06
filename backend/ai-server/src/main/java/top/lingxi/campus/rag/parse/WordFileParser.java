@@ -5,7 +5,7 @@ import org.springframework.stereotype.Component;
 import top.lingxi.campus.rag.ingestion.IngestionPipeline;
 import top.lingxi.campus.rag.ingestion.TextSegment;
 
-import top.lingxi.campus.rag.ingestion.WordTextExtractor;
+import top.lingxi.campus.rag.ingestion.extractor.WordTextExtractor;
 import top.lingxi.campus.domain.ai.dto.ChunkResponse;
 import top.lingxi.campus.domain.ai.dto.ParseMessage;
 

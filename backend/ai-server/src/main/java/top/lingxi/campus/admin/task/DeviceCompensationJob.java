@@ -1,6 +1,7 @@
 package top.lingxi.campus.admin.task;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,13 +20,12 @@ import java.util.List;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class DeviceCompensationJob {
 
-    @Autowired
-    private AdminDeviceRequestMapper requestMapper;
+    private final AdminDeviceRequestMapper requestMapper;
 
-    @Autowired
-    private DeviceCompensationService compensationService;
+    private final DeviceCompensationService compensationService;
 
     @Scheduled(fixedRate = 10 * 60 * 1000)
     public void run() {

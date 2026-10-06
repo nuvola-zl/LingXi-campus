@@ -12,15 +12,17 @@ import top.lingxi.campus.domain.rocord.eneity.SysApprovalRecord;
 import top.lingxi.campus.domain.rocord.mapper.SysApprovalRecordMapper;
 
 import java.time.LocalDateTime;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
+@RequiredArgsConstructor
 @Service
 public class PurchaseServiceImpl implements PurchaseService {
-    
-    @Autowired
-    private AdminPurchaseRequestMapper purchaseMapper;
-    
-    @Autowired
-    private SysApprovalRecordMapper approvalMapper;
+
+    private final AdminPurchaseRequestMapper purchaseMapper;
+
+    private final SysApprovalRecordMapper approvalMapper;
     
     /**
      * 审批采购申请

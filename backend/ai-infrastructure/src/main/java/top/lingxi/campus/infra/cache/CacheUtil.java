@@ -28,7 +28,6 @@ public class CacheUtil {
     private final StringRedisTemplate stringRedisTemplate;
     private final CacheManager cacheManager;
 
-    // ==================== 查询操作（两级缓存穿透） ====================
 
     /**
      * 两级缓存查询（穿透模式）
@@ -51,7 +50,6 @@ public class CacheUtil {
         if (localCache != null) {
             T localValue = localCache.get(redisKey, type);
             if (localValue != null) {
-                log.debug("Cache hit (Caffeine): key={}", redisKey);
                 return localValue;
             }
         }
@@ -68,7 +66,7 @@ public class CacheUtil {
             if (localCache != null) {
                 localCache.put(redisKey, value);
             }
-            log.debug("Cache hit (Redis): key={}", redisKey);
+
             return value;
         }
 

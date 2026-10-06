@@ -3,6 +3,8 @@ package top.lingxi.campus.tool.hr;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -15,9 +17,11 @@ import top.lingxi.campus.hr.service.MeetingRoomService;
 import top.lingxi.campus.tool.ToolCallGateway;
 
 import java.time.LocalDate;
+
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +38,7 @@ public class MeetingRoomTools {
 
     private final MeetingRoomService meetingRoomService;
     private final ToolCallGateway toolGateway;
+    private final RedissonClient redissonClient;
 
     @Tool(description = "查询某日期空闲场地（研讨间/活动室/体育馆等）")
     public String findAvailableRooms(
@@ -74,8 +79,29 @@ public class MeetingRoomTools {
             @ToolParam(description = "用途说明") String purpose) {
 
         Long realUserId = resolveUserId(toolContext);
-        return toolGateway.execute("bookRoom", Map.of("roomId", roomId, "date", date),
-                () -> doBookRoom(realUserId, roomId, date, startTime, endTime, purpose));
+
+        // 【并发修复】按 场地+日期 加锁，把 check-then-act 变成串行。
+        // 等 3 秒而不是立刻拒绝：订场地是用户主动操作，稍等比报错体验好
+        String lockKey = "bookRoom:" + roomId + ":" + date;
+        RLock lock = redissonClient.getLock(lockKey);
+        boolean acquired = false;
+        try {
+            acquired = lock.tryLock(3, 30, TimeUnit.SECONDS);
+            if (!acquired) {
+                return "该场地当前预定人数较多，请稍后再试。";
+            }
+            // execute 内部 join 会阻塞到工具执行完，所以 finally 里 unlock 是安全的
+            return toolGateway.execute("bookRoom",
+                    Map.of("roomId", roomId, "date", date, "startTime", startTime, "endTime", endTime),
+                    () -> doBookRoom(realUserId, roomId, date, startTime, endTime, purpose));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "系统繁忙，请稍后重试";
+        } finally {
+            if (acquired && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
     }
 
     private String doBookRoom(Long userId, Long roomId, String date,
@@ -114,7 +140,7 @@ public class MeetingRoomTools {
 
     private String doCancelBooking(Long userId, String bookingNo) {
         try {
-            meetingRoomService.cancelBookingByNo(bookingNo);
+            meetingRoomService.cancelBookingByNo(userId, bookingNo);
             return "✅ 预定 " + bookingNo + " 已取消。";
         } catch (Exception e) {
             log.error("场地取消失败: userId={}, bookingNo={}", userId, bookingNo, e);
@@ -165,4 +191,6 @@ public class MeetingRoomTools {
             default -> "未知";
         };
     }
+
+
 }

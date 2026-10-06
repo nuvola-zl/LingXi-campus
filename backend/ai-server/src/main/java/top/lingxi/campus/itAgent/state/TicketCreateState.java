@@ -56,7 +56,6 @@ public class TicketCreateState {
    private List<String> missingSlots;
 
 
-   // ===== 新增字段 =====
    private String suggestionContent;     // RAG 生成的推荐方案
    private List<String> suggestionSources; // 引用的知识库来源
    private String originalMessage;        // 用户原始问题（保留，建单时用）
@@ -67,7 +66,7 @@ public class TicketCreateState {
    // 现在加上 sessionId 维度，每个会话独立维护建单状态
    private Long sessionId;
 
-   // ===== 新增：对话历史 =====
+
    private List<ChatTurn> conversationHistory = new ArrayList<>();
 
    /**

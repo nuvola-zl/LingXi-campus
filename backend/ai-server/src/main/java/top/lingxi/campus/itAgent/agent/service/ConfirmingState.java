@@ -105,13 +105,14 @@ public class ConfirmingState implements DialogState {
                             return "DUPLICATE";
                         }
 
-                        Map<String, Object> args = Map.of(
-                                "userId", ctx.getUserId(),
-                                "title", state.getTitle(),
-                                "description", state.getDescription(),
-                                "priority", state.getPriority() != null ? state.getPriority() : 2,
-                                "sessionId", ctx.getSessionId()
-                        );
+                        Map<String, Object> args = new java.util.HashMap<>();
+                        args.put("userId", ctx.getUserId());
+                        args.put("title", state.getTitle());
+                        args.put("description", state.getDescription());
+                        args.put("priority", state.getPriority() != null ? state.getPriority() : 2);
+                        if (ctx.getSessionId() != null) {
+                            args.put("sessionId", ctx.getSessionId());
+                        }
 
                         String result = createTicketTool.execute(args);
 

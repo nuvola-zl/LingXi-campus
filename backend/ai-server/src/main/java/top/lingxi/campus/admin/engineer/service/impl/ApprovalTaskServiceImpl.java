@@ -2,6 +2,7 @@ package top.lingxi.campus.admin.engineer.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import top.lingxi.campus.admin.engineer.service.ApprovalTaskService;
@@ -19,16 +20,14 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+@RequiredArgsConstructor
 public class ApprovalTaskServiceImpl implements ApprovalTaskService {
 
-    @Autowired
-    private HrLeaveRequestMapper leaveMapper;
+    private final HrLeaveRequestMapper leaveMapper;
 
-    @Autowired
-    private HrPunchRecordMapper punchMapper;
+    private final HrPunchRecordMapper punchMapper;
 
-    @Autowired
-    private AdminPurchaseRequestMapper purchaseMapper;
+    private final AdminPurchaseRequestMapper purchaseMapper;
 
     /**
      * 获取所有待审批任务

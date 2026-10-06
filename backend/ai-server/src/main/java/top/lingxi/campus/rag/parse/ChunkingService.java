@@ -7,7 +7,21 @@ import top.lingxi.campus.infra.config.AstraProperties;
 
 import java.util.ArrayList;
 import java.util.List;
-
+///**第一步，先用正则按空行把原文切分成一个个段落，空行就是语义天然边界，段落作为最小打包单元，**正常情况下不会切开段落内部文字**。
+//
+//循环遍历每一个段落，一共三条判断分支：
+//
+//        1. 如果当前这个段落本身 token 数量超过了单个段落上限，说明是超长巨段。那就先把当前已经打包好的块落袋保存，然后调用专门方法，在这个段落内部做切分，切出来的子块直接加入结果列表，继续下一轮循环。
+//        2. 如果当前箱子里已经有内容，并且把新段落加进来之后，总 token 会超过目标块大小。那就先把当前箱子封块存入结果；接着提取当前块末尾的重叠文本，清空箱子；新箱子先放入这段重叠内容，再继续处理当前这个完整段落。重叠的作用是解决 RAG 检索时，语义边界丢失的问题。
+//        3. 如果加上这个段落不会超过目标大小，就直接把完整段落追加进当前块，累加 token 数量，继续读取下一段。
+//
+//        >
+//        > 关键要点：只要段落本身没有超过单段上限，段落永远是完整的，不会被拦腰截断。哪怕重叠文本加上当前段落，又超出目标大小，也不会切段落，只会把重叠单独封成一个小块，再开新箱子放完整段落。
+//
+//循环全部段落结束之后，还有收尾逻辑：处理最后留在箱子里的剩余文本，如果块太小，会尝试合并到前一块，避免出现无效碎块。
+//
+//一句话浓缩（简短版，应急）：
+//先按空行拆分出段落，以段落为最小不可拆分单元装箱；不断尝试往当前块追加完整段落，加满就封块，新块带上上一块末尾重叠；只有段落本身超长的时候，才切开段落内部。
 /**
  * 智能分块服务
  *
@@ -47,6 +61,8 @@ public class ChunkingService {
         int currentTokenSize = 0;
 
         // 按段落分割（兼容多空行）
+        // 注意：这里使用正则表达式 "\n\\s*\n" 来匹配段落，确保段落之间有至少一个空行
+        //采用语义优先分块策略
         String[] paragraphs = text.split("\n\\s*\n");
 
         for (String paragraph : paragraphs) {
@@ -110,6 +126,18 @@ public class ChunkingService {
         return chunks;
     }
 
+
+
+    /**
+     * 拆分超大段落：代码/表格用固定长度硬切，普通文本按句子切分
+     */
+    private List<String> splitLargeParagraph(String paragraph) {
+        if (isCodeLike(paragraph)) {
+            return splitByFixedLength(paragraph);
+        }
+        return splitBySentences(paragraph);
+    }
+
     /**
      * 判断段落是否为代码/表格类内容（无中文标点、换行多、特征符号密集）
      */
@@ -133,17 +161,6 @@ public class ChunkingService {
         }
         return (double) codeChars / text.length() > 0.03;
     }
-
-    /**
-     * 拆分超大段落：代码/表格用固定长度硬切，普通文本按句子切分
-     */
-    private List<String> splitLargeParagraph(String paragraph) {
-        if (isCodeLike(paragraph)) {
-            return splitByFixedLength(paragraph);
-        }
-        return splitBySentences(paragraph);
-    }
-
     /**
      * 代码/表格专用：按固定字符长度切分 + 重叠
      * 不在代码内部找句子边界，避免把代码切得稀碎

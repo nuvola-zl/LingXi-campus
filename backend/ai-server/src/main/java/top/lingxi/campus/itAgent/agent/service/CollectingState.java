@@ -17,6 +17,7 @@ import top.lingxi.campus.itAgent.state.TicketCreateState;
 public class CollectingState implements DialogState {
 
     private final AgentOrchestrator orchestrator;
+    private final ConfirmDataPreparer confirmDataPreparer;
 
     @Override
     public String name() {
@@ -81,33 +82,44 @@ public class CollectingState implements DialogState {
     // ==================== 业务逻辑：准备确认数据 ====================
 
     private Flux<AgentEvent> handleTransitionToConfirming(DialogContext ctx, String userMessage, AgentDecision d) {
+//        TicketCreateState state = ctx.getState();
+//
+//        // 拼接完整描述（含原始问题、建议、历史）
+//        String enrichedDesc = buildEnrichedDescription(state, userMessage);
+//        state.setDescription(enrichedDesc);
+//
+//        // 智能提取标题
+//        String title = extractTitle(userMessage);
+//        state.setTitle(title);
+//        // 在 handleTransitionToConfirming 里替换 state.setPriority(2);
+//        int priority = isUrgent(userMessage, state.getOriginalMessage()) ? 1 : 2;
+//        state.setPriority(priority);
+//
+//        // 确认文案：优先用 Orchestrator 生成的，否则自己拼接
+//        String confirmText = d.content() != null && !d.content().isBlank()
+//                ? d.content()
+//                : String.format(
+//                "请确认以下报修单信息：\n【标题】%s\n【描述】%s\n【优先级】普通\n\n回复\"确认\"创建报修单，回复\"取消\"放弃。",
+//                state.getTitle(), userMessage.trim());
+//
+//        state.addHistory("ai", confirmText);
+//
+//        return Flux.just(
+//                AgentEvent.respond(confirmText),
+//                AgentEvent.transition("CONFIRMING")
+//        );
         TicketCreateState state = ctx.getState();
+        confirmDataPreparer.prepareIfAbsent(state, userMessage, d.ticketTitle());   // ← 替换原来三段set
 
-        // 拼接完整描述（含原始问题、建议、历史）
-        String enrichedDesc = buildEnrichedDescription(state, userMessage);
-        state.setDescription(enrichedDesc);
-
-        // 智能提取标题
-        String title = extractTitle(userMessage);
-        state.setTitle(title);
-        // 在 handleTransitionToConfirming 里替换 state.setPriority(2);
-        int priority = isUrgent(userMessage, state.getOriginalMessage()) ? 1 : 2;
-        state.setPriority(priority);
-
-        // 确认文案：优先用 Orchestrator 生成的，否则自己拼接
         String confirmText = d.content() != null && !d.content().isBlank()
                 ? d.content()
-                : String.format(
-                "请确认以下报修单信息：\n【标题】%s\n【描述】%s\n【优先级】普通\n\n回复\"确认\"创建报修单，回复\"取消\"放弃。",
-                state.getTitle(), userMessage.trim());
-
+                : String.format("请确认以下报修单信息：\n【标题】%s\n【描述】%s\n【优先级】%s\n\n回复\"确认\"创建报修单，回复\"取消\"放弃。",
+                state.getTitle(), state.getDescription(),
+                state.getPriority() == 1 ? "紧急" : "普通");
         state.addHistory("ai", confirmText);
-
-        return Flux.just(
-                AgentEvent.respond(confirmText),
-                AgentEvent.transition("CONFIRMING")
-        );
+        return Flux.just(AgentEvent.respond(confirmText), AgentEvent.transition("CONFIRMING"));
     }
+
 
     // ==================== 原有业务方法（不变）====================
 

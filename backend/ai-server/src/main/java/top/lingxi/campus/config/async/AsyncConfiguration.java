@@ -8,12 +8,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
 
-/**
- * @description: 异步任务配置
- * @author: Hazenix
- * @version: 1.0.0
- * @date: 2026/1/27
- */
+
 @Slf4j
 @Configuration
 @EnableAsync

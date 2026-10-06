@@ -64,10 +64,12 @@ public class AstraMediaServiceImpl implements IAstraMediaService {
             throw new BusinessException(ErrorCode.FORBIDDEN, "无权限上传到此知识库");
         }
 
+        // 校验上传配置
         AstraProperties.Upload uploadConfig = astraProperties.getUpload();
 
         // 校验文件类型（配置驱动白名单）
         String mimeType = file.getContentType();
+
         if (mimeType == null || !uploadConfig.getAllowedTypes().contains(mimeType)) {
             throw new BusinessException(ErrorCode.ASTRA_UNSUPPORTED_FILE_TYPE,
                     "不支持的文件类型: " + mimeType);

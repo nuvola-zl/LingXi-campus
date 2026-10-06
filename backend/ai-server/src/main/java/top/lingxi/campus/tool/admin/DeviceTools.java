@@ -78,14 +78,17 @@ public class DeviceTools {
 
     @Tool(description = "查询器材借用进度")
     public String queryDeviceStatus(
+            ToolContext toolContext,                                    // ← 新增
             @ToolParam(description = "借用单号") String requestNo) {
 
-        return toolGateway.execute("queryDeviceStatus", Map.of("requestNo", requestNo),
-                () -> doQueryDeviceStatus(requestNo));
+        Long realUserId = resolveUserId(toolContext);                   // ← 新增
+        return toolGateway.execute("queryDeviceStatus",
+                Map.of("requestNo", requestNo, "userId", realUserId),   // 审计也带上
+                () -> doQueryDeviceStatus(realUserId, requestNo));
     }
 
-    private String doQueryDeviceStatus(String requestNo) {
-        AdminDeviceRequest request = deviceRequestService.getByRequestNo(requestNo);
+    private String doQueryDeviceStatus(Long userId, String requestNo) {
+        AdminDeviceRequest request = deviceRequestService.getOwnByRequestNo(requestNo, userId);  // ← 改这里
         if (request == null) return "❌ 单号不存在，请检查单号是否正确。";
 
         String[] statusMap = {"", "待处理", "购置中", "准备中", "待领取", "已完成", "已取消", "处理失败"};
