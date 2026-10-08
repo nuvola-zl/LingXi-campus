@@ -11,6 +11,8 @@ import top.lingxi.campus.itAgent.agent.core.DialogContext;
 import top.lingxi.campus.itAgent.agent.core.DialogState;
 import top.lingxi.campus.itAgent.state.TicketCreateState;
 
+import java.util.Map;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -73,6 +75,13 @@ public class CollectingState implements DialogState {
             String content = d.content() != null ? d.content() : "好的，请继续。";
             ctx.getState().addHistory("ai", content);
             return Flux.just(AgentEvent.respond(content), AgentEvent.transition(d.targetState()));
+        }
+
+        // TOOL_CALL：查单/催单/关单，交给状态机执行后保持 COLLECTING（规则4承诺的能力）
+        if (d.isToolCall()) {
+            Map<String, Object> input = d.toolInput() != null ? d.toolInput() : Map.of();
+            log.info("[CollectingState] 执行工具调用: tool={}, input={}", d.toolName(), input);
+            return Flux.just(AgentEvent.toolCall(d.toolName(), input));
         }
 
         // 兜底

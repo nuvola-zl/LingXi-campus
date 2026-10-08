@@ -1,5 +1,162 @@
 [
-  { "question": "这里替换成真实用户会问的问题1", "goldFile": "包含答案的文件名.pdf", "goldPage": 3 },
-  { "question": "问题2", "goldFile": "答案所在文件.docx" },
-  { "question": "问题3", "goldFile": "答案所在文件.md" }
+  {
+    "question": "校园网账号的初始密码是什么",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "学生每月免费流量是多少，超了会怎样",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "认证页面弹不出来怎么办",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "连上网但打不开网页，QQ却能用，可能是什么原因",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "一个账号最多允许几台设备同时在线",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "晚上九点以后网络故障找谁处理",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "私接路由器会怎样",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "密码忘了且绑定的手机号停用了，怎么重置",
+    "goldFile": "校园网络使用指南.md"
+  },
+  {
+    "question": "宿舍跳闸了第一步该做什么",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "水龙头漏水可能有哪些原因",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "空调不制冷，自己可以先做什么",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "不同紧急程度的报修，维修时限分别是多久",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "修好的东西七天内又坏了怎么办",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "空调遥控器丢了赔多少钱",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "维修人员上门时怎么核实身份",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "寒暑假期间还能报修吗",
+    "goldFile": "宿舍后勤报修手册.md"
+  },
+  {
+    "question": "借相机需要什么条件",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "普通器材能借多久，可以续借吗",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "一个人最多同时借几件器材",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "研讨间预约有什么限制",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "篮球能借回宿舍第二天再还吗",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "对器材赔偿金额不服怎么办",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "预约的场地临时去不了怎么取消",
+    "goldFile": "校园器材借用与场地预约说明.md"
+  },
+  {
+    "question": "请病假3天需要什么材料",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "请假超过14天有什么额外要求",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "补签申请有时间限制吗",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "打印成绩单怎么收费",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "校园卡丢了第一步应该做什么",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "补办校园卡多少钱，多久能拿到",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "失物能保管多久",
+    "goldFile": "学生事务办理指南.md"
+  },
+  {
+    "question": "学校游泳池几点开门",
+    "goldFile": null
+  },
+  {
+    "question": "食堂麻辣香锅在几楼",
+    "goldFile": null
+  },
+  {
+    "question": "怎么申请交换生项目",
+    "goldFile": null
+  },
+  {
+    "question": "奖学金答辩要注意什么",
+    "goldFile": null
+  },
+  {
+    "question": "校车去火车站的发车时间",
+    "goldFile": null
+  },
+  {
+    "question": "四级考试怎么报名",
+    "goldFile": null
+  },
+  {
+    "question": "选修课可以退课吗",
+    "goldFile": null
+  },
+  {
+    "question": "宿舍能用电磁炉吗",
+    "goldFile": null
+  },
+  {
+    "question": "怎么查自己的绩点排名",
+    "goldFile": null
+  },
+  {
+    "question": "图书馆能带咖啡进去吗",
+    "goldFile": null
+  }
 ]

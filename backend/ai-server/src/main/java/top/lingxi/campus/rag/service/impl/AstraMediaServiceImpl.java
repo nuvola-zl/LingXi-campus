@@ -227,6 +227,7 @@ public class AstraMediaServiceImpl implements IAstraMediaService {
         }
         return switch (mimeType) {
             case "text/plain" -> isMarkdownFile(originalFileName) ? "MD" : "TXT";
+            case "text/markdown" -> "MD";
             case "application/pdf" -> "PDF";
             case "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "DOCX";
             default -> "UNKNOWN";

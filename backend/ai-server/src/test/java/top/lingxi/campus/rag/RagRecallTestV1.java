@@ -23,7 +23,7 @@ import java.util.List;
  * 判定规则：TopK 中任一结果的 source 以 goldFile 开头，且（若指定 goldPage）包含"第N页"，记为命中。
  */
 @SpringBootTest
-class RagRecallTest {
+class RagRecallTestV1 {
 
     @Autowired
     private IAstraSearchService searchService;
@@ -33,7 +33,7 @@ class RagRecallTest {
 
     @Autowired
     private ObjectMapper objectMapper;
-    
+
     private static final long LIBRARY_ID = 1L;
 
     private static final int CANDIDATE_K = 30;   // RRF 融合后的候选数（对齐 rrf-output-top-k=30）
