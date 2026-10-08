@@ -1,6 +1,6 @@
-# Haze-AI-Hub 开发文档集
-
-本目录是 Haze-AI-Hub（企业内部 AI 助手平台，Spring Boot 3.4 + Spring AI + MyBatis-Plus + PostgreSQL/pgvector + Redis）项目开发过程的文档沉淀，涵盖架构设计、方案权衡、问题排查与测试验证四个方面。
+#  开发文档集
+项目原名：Haze-AI-Hub，现修改为：LingXi-campus
+本目录是 （AI 助手平台，Spring Boot 3.4 + Spring AI + MyBatis-Plus + PostgreSQL/pgvector + Redis）项目开发过程的文档沉淀，涵盖架构设计、方案权衡、问题排查与测试验证四个方面。
 
 文档中的代码分析、方案对比等内容部分借助 AI 工具完成，所有结论均经过作者读源码、查数据库或联调测试亲自验证；文中已如实标注协作过程与验证结果。
 
