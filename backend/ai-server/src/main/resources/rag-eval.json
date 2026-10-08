@@ -1,0 +1,5 @@
+[
+  { "question": "这里替换成真实用户会问的问题1", "goldFile": "包含答案的文件名.pdf", "goldPage": 3 },
+  { "question": "问题2", "goldFile": "答案所在文件.docx" },
+  { "question": "问题3", "goldFile": "答案所在文件.md" }
+]
